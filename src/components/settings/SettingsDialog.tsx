@@ -196,7 +196,8 @@ export function SettingsDialog({ open, onOpenChange, tab, onTabChange }: Setting
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Keys are verified offline (Ed25519) — no account or license server needed. Agencies can also set{' '}
+                  Keys are verified offline (Ed25519). Once a day the site checks in with the WP Chrono license server to count
+                  sites; if it can&apos;t be reached, your key keeps working. Agencies can also set{' '}
                   <code className="rounded bg-muted px-1">WP_CHRONO_LICENSE_KEY</code> in wp-config.php.
                 </p>
               </form>

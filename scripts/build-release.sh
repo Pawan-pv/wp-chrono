@@ -19,6 +19,7 @@ STABLE="$(sed -n 's/^Stable tag: *//p' readme.txt | tr -d '\r')"
 DIST="dist/wp-chrono"
 ZIP="dist/wp-chrono-$VERSION.zip"
 echo "Building WP Chrono $VERSION"
+grep -q "Update URI: .*CHANGE-ME" wp-chrono.php && echo "  (warning: placeholder Update URI; cloud/scripts/publish-release.mjs will refuse this build)"
 
 if [ "${1:-}" != "--skip-build" ]; then
   echo "• npm run build"

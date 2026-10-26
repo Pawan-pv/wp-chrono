@@ -14,6 +14,7 @@ namespace WPChrono\Core;
 use WPChrono\API\Router;
 use WPChrono\CLI\Commands;
 use WPChrono\Services\SnapshotService;
+use WPChrono\Services\Updater;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -52,6 +53,7 @@ final class Plugin {
 		if ( is_admin() || wp_doing_cron() || $cli ) {
 			add_filter( 'upgrader_pre_install', array( SnapshotService::class, 'before_update' ), 10, 2 );
 			add_filter( 'upgrader_post_install', array( SnapshotService::class, 'after_update' ), 10, 3 );
+			Updater::register();
 		}
 
 		if ( $cli ) {

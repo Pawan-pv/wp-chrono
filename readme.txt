@@ -1,13 +1,13 @@
 === WP Chrono — Reset, Snapshots, Update Undo & Emergency Recovery ===
 Tags: reset, snapshot, rollback, backup, recovery
 Requires at least: 6.3
-Tested up to: 6.7
+Tested up to: 7.1
 Requires PHP: 7.4
 Stable tag: 1.0.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Undo any plugin update (files + database), reset safely, and recover a crashed site from a secret page that works even when WordPress doesn't. Restoring is always free.
+Undo plugin updates (files + database), reset safely, and recover a crashed site even when WordPress won't load. Restoring is always free.
 
 == Description ==
 
@@ -61,7 +61,11 @@ Every feature is available from WP-CLI: `wp chrono status`, `wp chrono reset …
 
 = Privacy =
 
-WP Chrono does not track you, phone home or load anything on your public pages. It only makes outbound requests you configure: to your own cloud bucket (Pro) and, if you set one, a license server.
+WP Chrono does not track you or load anything on your public pages. It makes these outbound requests, only from wp-admin, WP-Cron or WP-CLI:
+
+* **Update check** (the WP Chrono API): sends only the installed WP Chrono version, at most twice a day, so WordPress can offer updates. Every update package is verified against an Ed25519 release signature before it is installed.
+* **License check**, only when a license key is entered: sends the key, your site address and the plugin version on activation, deactivation and at most once a day, to count the sites a key is used on. Define `WP_CHRONO_LICENSE_SERVER` as `''` in `wp-config.php` to keep licensing fully offline.
+* **Your cloud bucket** (Pro), only if you configure one.
 
 == Installation ==
 
@@ -82,6 +86,14 @@ Yes. Snapshots → Import .sql.gz uploads the file in chunks (upload size limits
 = What happens if an update crashes my whole site? =
 
 Open your Emergency Recovery Script (download the recovery kit during onboarding so you have the URL and password). It works without WordPress and offers "Undo Last Update (Files + DB)".
+
+During any undo that swaps both files and database, visitors see WordPress's standard "Briefly unavailable for scheduled maintenance" page for a moment, so no request can run the broken code against the restored database.
+
+= I use nginx. Are my snapshot files safe? =
+
+Yes. Nginx ignores `.htaccess`, so WP Chrono stores everything in a `wp-content/wp-chrono-<random>` folder and gives every database export a random 32-character file name; downloads always go through a logged-in, nonce-checked request. For defense in depth, add this to your server block, above the `location ~ \.php$` block (nginx checks regex locations in order):
+
+`location ~* "^/wp-content/wp-chrono-[A-Za-z0-9]{16}/" { deny all; }`
 
 = Does WP Chrono slow down my site? =
 

@@ -18,16 +18,16 @@
  * Key sources, first wins: the WP_CHRONO_LICENSE_KEY constant, then the key
  * saved via the UI / `wp chrono license activate`.
  *
- * Optional remote server (WP_CHRONO_LICENSE_SERVER constant or saved URL,
- * off by default) for live activation / revocation. Contract:
+ * License server (seats, revocation): `{Updater::api()}/v1/license`, unless the
+ * WP_CHRONO_LICENSE_SERVER constant names another, or '' (fully offline). Contract:
  *
  *   POST {server}  JSON {"action":"activate|deactivate|check","key":"WPC1…","site":"https://…","version":"1.0.0"}
- *   200            JSON {"lid":"…","site":"https://…","status":"active|revoked","ts":1761460000,
+ *   200            JSON {"lid":"…","site":"https://…","status":"active|site_limit|revoked|expired|inactive","ts":1761460000,
  *                        "sig":"<base64url Ed25519( "WPCR1.{lid}.{site}.{status}.{ts}" )>"}
  *
- * Responses must be signed with the same vendor key. Checks run at most
- * daily, only in wp-admin / REST / CLI (never on the front end). An
- * unreachable server never disables a valid key; a signed `revoked` does.
+ * Responses must be signed with the vendor key. Checks run at most daily, only in
+ * wp-admin / REST / CLI. An unreachable server never disables a valid key; a
+ * signed `revoked` or `site_limit` does, until a later check says `active`.
  *
  * @package WPChrono
  */
@@ -53,6 +53,12 @@ final class LicenseService {
 	const PRO_FEATURES = array( 'blueprints', 'cloud' );
 
 	const PLANS = array( 'pro', 'agency' );
+
+	/** Signed server verdicts that switch Pro off, with the reason shown to the user. */
+	const BLOCKING = array(
+		'revoked'    => 'This license was revoked by the license server.',
+		'site_limit' => 'This license key is already active on its maximum number of sites. Deactivate it on another site (Settings → License), then check again.',
+	);
 
 	// ---------------------------------------------------------------------
 	// Verification
@@ -158,9 +164,10 @@ final class LicenseService {
 		$saved   = is_array( $saved ) ? $saved : array();
 		$payload = '' === $stored['key'] ? null : self::parse( $stored['key'] );
 		$error   = is_wp_error( $payload ) ? $payload->get_error_message() : null;
-		$revoked = 'revoked' === ( $saved['remote']['status'] ?? '' ) && is_array( $payload ) && ( $saved['remote']['lid'] ?? '' ) === $payload['lid'];
+		$verdict = (string) ( $saved['remote']['status'] ?? '' );
+		$revoked = isset( self::BLOCKING[ $verdict ] ) && is_array( $payload ) && ( $saved['remote']['lid'] ?? '' ) === $payload['lid'];
 		if ( $revoked ) {
-			$error = 'This license was revoked by the license server.';
+			$error = self::BLOCKING[ $verdict ];
 		}
 		$active = is_array( $payload ) && ! $revoked;
 
@@ -227,7 +234,8 @@ final class LicenseService {
 			}
 			if ( ! is_wp_error( $remote ) && 'active' !== $remote['status'] ) {
 				update_option( self::OPTION, array_diff_key( $saved, array( 'key' => 1 ) ), false );
-				return new WP_Error( 'wp_chrono_license_revoked', 'The license server rejected this key (status: ' . $remote['status'] . ').', array( 'status' => 400 ) );
+				$why = 'site_limit' === $remote['status'] ? ' ' . self::BLOCKING['site_limit'] : '';
+				return new WP_Error( 'wp_chrono_license_revoked', 'The license server rejected this key (status: ' . $remote['status'] . ').' . $why, array( 'status' => 400 ) );
 			}
 			// The activation call counts as today's check.
 			set_transient( self::CHECK_TRANSIENT, time(), DAY_IN_SECONDS );
@@ -256,12 +264,21 @@ final class LicenseService {
 	// Optional license server
 	// ---------------------------------------------------------------------
 
+	/**
+	 * Server URL, first wins: the constant ('' = offline only), a saved URL,
+	 * the WP Chrono API.
+	 */
 	public static function server(): string {
 		if ( defined( 'WP_CHRONO_LICENSE_SERVER' ) ) {
 			return self::clean_server( (string) WP_CHRONO_LICENSE_SERVER );
 		}
 		$saved = get_option( self::OPTION, array() );
-		return is_array( $saved ) ? self::clean_server( (string) ( $saved['server'] ?? '' ) ) : '';
+		$url   = is_array( $saved ) ? self::clean_server( (string) ( $saved['server'] ?? '' ) ) : '';
+		if ( '' !== $url ) {
+			return $url;
+		}
+		$api = Updater::api();
+		return '' === $api ? '' : self::clean_server( $api . '/v1/license' );
 	}
 
 	private static function clean_server( string $url ): string {
