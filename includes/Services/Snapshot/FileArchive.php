@@ -184,16 +184,16 @@ final class FileArchive {
 			$target = $item['target'];
 			$parked = false;
 			if ( file_exists( $target ) || is_link( $target ) ) {
-				if ( ! @rename( $target, $item['old'] ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors
+				if ( ! @rename( $target, $item['old'] ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors, WordPress.WP.AlternativeFunctions.rename_rename
 					$log[] = "Could not move the current {$item['slug']} aside; it was left unchanged.";
 					self::rmtree( $item['new'] );
 					continue;
 				}
 				$parked = true;
 			}
-			if ( ! @rename( $item['new'], $target ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors
+			if ( ! @rename( $item['new'], $target ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors, WordPress.WP.AlternativeFunctions.rename_rename
 				if ( $parked ) {
-					@rename( $item['old'], $target ); // phpcs:ignore WordPress.PHP.NoSilencedErrors
+					@rename( $item['old'], $target ); // phpcs:ignore WordPress.PHP.NoSilencedErrors, WordPress.WP.AlternativeFunctions.rename_rename
 				}
 				self::rmtree( $item['new'] );
 				$log[] = "Could not swap in the archived {$item['slug']}; the current version was kept.";
@@ -283,6 +283,33 @@ final class FileArchive {
 			file_put_contents( $dir . 'index.php', "<?php\n// Silence is golden.\n" ); // phpcs:ignore WordPress.WP.AlternativeFunctions
 		}
 		return $dir;
+	}
+
+	/**
+	 * Puts the site in WordPress maintenance mode for the table + folder swap.
+	 * wp_maintenance() runs before plugins load, so no request can run the
+	 * updated code against the restored database (or write its data back)
+	 * between the two swaps. Returns false if a .maintenance file already
+	 * existed — it is then left for its owner to remove.
+	 */
+	public static function maintenance_on(): bool {
+		$file = ABSPATH . '.maintenance';
+		if ( file_exists( $file ) ) {
+			return false;
+		}
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+		if ( false === @file_put_contents( $file, '<?php $upgrading = ' . time() . ';' ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors
+			return false;
+		}
+		// Let requests that loaded the old code just before this finish first.
+		usleep( 500000 );
+		return true;
+	}
+
+	public static function maintenance_off( bool $created ): void {
+		if ( $created ) {
+			@unlink( ABSPATH . '.maintenance' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors, WordPress.WP.AlternativeFunctions.unlink_unlink
+		}
 	}
 
 	/**
@@ -394,7 +421,7 @@ final class FileArchive {
 			return null;
 		}
 		$parked = dirname( $dir ) . '/.wpc-old-stray-' . basename( $dir );
-		if ( ! @rename( $dir, $parked ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors
+		if ( ! @rename( $dir, $parked ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors, WordPress.WP.AlternativeFunctions.rename_rename
 			return null;
 		}
 		self::rmtree( $parked );
@@ -493,7 +520,7 @@ final class FileArchive {
 	 * on different filesystems (rename() can't move directories across them).
 	 */
 	private static function move( string $from, string $to ): bool {
-		if ( @rename( $from, $to ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors
+		if ( @rename( $from, $to ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors, WordPress.WP.AlternativeFunctions.rename_rename
 			return true;
 		}
 		if ( is_file( $from ) ) {

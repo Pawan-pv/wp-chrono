@@ -7,8 +7,6 @@
 
 namespace WPChrono\Services\Reset;
 
-use WPChrono\Services\Database;
-
 defined( 'ABSPATH' ) || exit;
 
 final class OrphanedMetaCleaner extends Cleaner {
@@ -39,9 +37,9 @@ final class OrphanedMetaCleaner extends Cleaner {
 		foreach ( $this->relations() as list( $meta, $fk, $parent, $pk, $id ) ) {
 			$count = 0;
 			do {
-				$ids = $wpdb->get_col( "SELECT m.{$id} FROM {$meta} m LEFT JOIN {$parent} p ON p.{$pk} = m.{$fk} WHERE p.{$pk} IS NULL LIMIT " . self::BATCH );
+				$ids = $wpdb->get_col( $wpdb->prepare( 'SELECT m.%i FROM %i m LEFT JOIN %i p ON p.%i = m.%i WHERE p.%i IS NULL LIMIT %d', $id, $meta, $parent, $pk, $fk, $pk, self::BATCH ) );
 				if ( $ids ) {
-					$count += (int) $wpdb->query( "DELETE FROM {$meta} WHERE {$id} IN (" . Database::id_list( $ids ) . ')' );
+					$count += (int) $wpdb->query( $wpdb->prepare( 'DELETE FROM %i WHERE %i IN (' . implode( ',', array_fill( 0, count( $ids ), '%d' ) ) . ')', array_merge( array( $meta, $id ), array_map( 'intval', $ids ) ) ) );
 				}
 				if ( count( $ids ) >= self::BATCH && self::out_of_time( $deadline ) ) {
 					$log[] = sprintf( 'Purged %d rows from %s so far…', $count, $meta );

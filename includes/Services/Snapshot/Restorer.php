@@ -271,6 +271,7 @@ final class Restorer {
 		$log      = $kept ? array( sprintf( 'Kept %d network-wide tables untouched (%s); subsite users and blogs are unaffected.', count( $kept ), implode( ', ', $kept ) ) ) : array();
 		$old_like = $wpdb->esc_like( Schema::SNAPSHOT_TABLE_PREFIX . 'old_' . $job['id'] . '_' ) . '%';
 		$swap_ms  = 0;
+		$offline  = ! empty( $job['files'] ) && FileArchive::maintenance_on();
 		$swapped  = Database::without_foreign_keys(
 			static function () use ( $renames, $job, $old_like, $wpdb, $swap_started, &$swap_ms, &$log ) {
 				// phpcs:disable WordPress.DB
@@ -301,6 +302,7 @@ final class Restorer {
 			}
 		);
 		if ( false === $swapped ) {
+			FileArchive::maintenance_off( $offline );
 			// RENAME TABLE is all-or-nothing: the live site is untouched. Keep
 			// staging (tables and files) so the swap can be retried.
 			return new WP_Error( 'wp_chrono_swap_failed', 'Atomic swap failed; the live database and files were not changed. ' . $wpdb->last_error, array( 'status' => 500 ) );
@@ -315,6 +317,7 @@ final class Restorer {
 			$log            = array_merge( $log, $files['log'] );
 			FileArchive::discard( array(), (string) $job['id'] );
 		}
+		FileArchive::maintenance_off( $offline );
 
 		// --- Repair the restored database ------------------------------------
 		Session::restore_options( $options );

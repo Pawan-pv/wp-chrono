@@ -15,7 +15,7 @@ final class TransientsCleaner extends Cleaner {
 	public function preview(): array {
 		global $wpdb;
 
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:disable WordPress.DB -- the WHERE fragments are built with $wpdb->prepare().
 		$options = $wpdb->get_row( "SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(option_name) + LENGTH(option_value)), 0) AS b FROM {$wpdb->options} WHERE " . $this->options_where(), ARRAY_A );
 		$items   = (int) $options['n'];
 		$bytes   = (int) $options['b'];

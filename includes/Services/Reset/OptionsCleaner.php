@@ -52,7 +52,7 @@ final class OptionsCleaner extends Cleaner {
 
 	public function preview(): array {
 		global $wpdb;
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:ignore WordPress.DB -- where() is built with $wpdb->prepare().
 		$row = $wpdb->get_row( "SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(option_name) + LENGTH(option_value)), 0) AS b FROM {$wpdb->options} WHERE " . $this->where(), ARRAY_A );
 		return self::summary(
 			(int) $row['n'],

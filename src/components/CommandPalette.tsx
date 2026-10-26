@@ -27,16 +27,20 @@ interface CommandPaletteProps {
 }
 
 export function CommandPalette({ open, onOpenChange, onNavigate, onToggleTheme, onOpenSettings }: CommandPaletteProps) {
-  // Cmd+K / Ctrl+K anywhere on the page.
+  // Cmd+K / Ctrl+K anywhere on the page. WordPress 7+ binds the same keys to
+  // its own admin command palette on every screen; claiming them on window in
+  // the capture phase (before any document listener) keeps the two from
+  // opening together on this screen.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() === 'k' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
+        e.stopImmediatePropagation();
         onOpenChange(!open);
       }
     };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [open, onOpenChange]);
 
   // Recent snapshots for "Restore …" commands, fetched when the palette opens.

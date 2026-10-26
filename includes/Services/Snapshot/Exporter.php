@@ -297,7 +297,8 @@ final class Exporter {
 	private function escape( string $value ): string {
 		global $wpdb;
 		if ( $wpdb->dbh instanceof \mysqli ) {
-			return mysqli_real_escape_string( $wpdb->dbh, $value );
+			// $wpdb->_real_escape() would add placeholder escapes to '%', corrupting the dump file.
+			return mysqli_real_escape_string( $wpdb->dbh, $value ); // phpcs:ignore WordPress.DB.RestrictedFunctions.mysql_mysqli_real_escape_string
 		}
 		return addslashes( $value );
 	}

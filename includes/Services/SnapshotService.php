@@ -121,8 +121,8 @@ final class SnapshotService {
 					continue;
 				}
 				$strategy = TableCopier::strategy( $source );
-				$wpdb->query( 'DROP TABLE IF EXISTS ' . Database::quote_identifier( $copy ) );
-				if ( false === $wpdb->query( 'CREATE TABLE ' . Database::quote_identifier( $copy ) . ' LIKE ' . Database::quote_identifier( $source ) ) ) {
+				$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $copy ) );
+				if ( false === $wpdb->query( $wpdb->prepare( 'CREATE TABLE %i LIKE %i', $copy, $source ) ) ) {
 					return $this->fail( $id, "Could not create {$copy}: {$wpdb->last_error}" );
 				}
 				$create = TableCopier::normalized_create( $source );
@@ -222,7 +222,7 @@ final class SnapshotService {
 				continue;
 			}
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-			$count       = (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . Database::quote_identifier( $copy ) );
+			$count       = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i', $copy ) );
 			$rows_total += $count;
 			if ( $count !== (int) $row['row_count'] ) {
 				$mismatches[] = sprintf( '%s: %d rows in the copy, %d recorded', $source, $count, (int) $row['row_count'] );
@@ -404,7 +404,7 @@ final class SnapshotService {
 		Database::without_foreign_keys(
 			static function () use ( $tables, $wpdb ) {
 				foreach ( array_unique( $tables ) as $table ) {
-					$wpdb->query( 'DROP TABLE IF EXISTS ' . Database::quote_identifier( $table ) );
+					$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $table ) );
 				}
 			}
 		);

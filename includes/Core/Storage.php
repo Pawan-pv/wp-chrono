@@ -38,7 +38,7 @@ final class Storage {
 		}
 
 		foreach ( self::guard_files() as $file => $contents ) {
-			if ( ! file_exists( $dir . $file ) && false === file_put_contents( $dir . $file, $contents ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+			if ( ! file_exists( $dir . $file ) && false === file_put_contents( $dir . $file, $contents ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents, PluginCheck.CodeAnalysis.WriteFile.PluginDirectoryWrite -- wp-content/wp-chrono-<random>/, not the plugin folder.
 				return new WP_Error( 'wp_chrono_storage', __( 'Unable to write protection files to the WP Chrono storage directory.', 'wp-chrono' ) );
 			}
 		}

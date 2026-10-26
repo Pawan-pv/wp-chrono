@@ -786,6 +786,25 @@ function wpc_stage_files( array $entries, $dir, $content_dir, $job ) {
 	return array( true, $staged );
 }
 
+/** Writes ABSPATH/.maintenance; returns its path, or '' if one already existed or it could not be written. */
+function wpc_maintenance_on( $config_file ) {
+	$root = file_exists( __DIR__ . '/wp-settings.php' ) ? __DIR__ : ( $config_file ? dirname( $config_file ) : '' );
+	if ( '' === $root || ! file_exists( $root . '/wp-settings.php' ) || file_exists( $root . '/.maintenance' ) ) {
+		return '';
+	}
+	if ( false === @file_put_contents( $root . '/.maintenance', '<?php $upgrading = ' . time() . ';' ) ) {
+		return '';
+	}
+	usleep( 500000 );
+	return $root . '/.maintenance';
+}
+
+function wpc_maintenance_off( $file ) {
+	if ( '' !== $file ) {
+		@unlink( $file );
+	}
+}
+
 /** Two renames per folder (live → parked, staged → live); the live folder is put back if the second fails. */
 function wpc_commit_files( array $staged ) {
 	$done = array();
@@ -983,9 +1002,15 @@ if ( 'POST' === $method ) {
 			if ( '' === $dir ) {
 				wpc_redirect( 'WP Chrono\'s storage folder is not recorded in the database, so the archived files cannot be found.', 'err' );
 			}
-			$job = substr( bin2hex( random_bytes( 4 ) ), 0, 6 );
+			// Maintenance mode for the whole undo: no request may run the updated
+			// code against the restored tables, or write its data back, between
+			// the table swap and the folder swap. Staging doubles as a drain for
+			// requests already running.
+			$offline = wpc_maintenance_on( $config_file );
+			$job     = substr( bin2hex( random_bytes( 4 ) ), 0, 6 );
 			list( $ok, $staged ) = wpc_stage_files( $snapshots[ $id ]['files'], $dir, $content_dir, $job );
 			if ( ! $ok ) {
+				wpc_maintenance_off( $offline );
 				wpc_redirect( $staged, 'err' );
 			}
 			list( $ok, $msg ) = wpc_restore( $db, $snapshots[ $id ], wpc_network_skip( $defines, $prefix ) );
@@ -993,9 +1018,11 @@ if ( 'POST' === $method ) {
 				foreach ( $staged as $item ) {
 					wpc_rmtree( $item['new'] );
 				}
+				wpc_maintenance_off( $offline );
 				wpc_redirect( $msg . ' Plugin and theme files were left unchanged.', 'err' );
 			}
 			$reverted = wpc_commit_files( $staged );
+			wpc_maintenance_off( $offline );
 			wpc_redirect( sprintf( 'Undid the update: reverted %d of %d plugin/theme folder(s) (%s). %s', count( $reverted ), count( $staged ), implode( ', ', $reverted ), $msg ), count( $reverted ) === count( $staged ) ? 'ok' : 'err' );
 			break;
 

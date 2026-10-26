@@ -79,7 +79,7 @@ final class Importer {
 				gzclose( $in );
 				fclose( $out ); // phpcs:ignore WordPress.WP.AlternativeFunctions
 				@unlink( $sql ); // phpcs:ignore
-				return $this->fail( $id, 'The .sql.gz file is corrupt (gzip data error).' );
+				return $this->fail( $id, 'The .sql.gz file is corrupt (gzip data error).', 422 );
 			}
 			fwrite( $out, $chunk ); // phpcs:ignore WordPress.WP.AlternativeFunctions
 			$tail = substr( $tail . $chunk, -256 );
@@ -89,7 +89,7 @@ final class Importer {
 		// Exporter always ends with this footer; without it the file is truncated.
 		if ( false === strpos( $tail, '-- End of WP Chrono export' ) ) {
 			@unlink( $sql ); // phpcs:ignore
-			return $this->fail( $id, 'The dump is incomplete (no end-of-export marker); it may have been truncated during download or upload.' );
+			return $this->fail( $id, 'The dump is incomplete (no end-of-export marker); it may have been truncated during download or upload.', 422 );
 		}
 
 		$known = array();
@@ -155,7 +155,8 @@ final class Importer {
 
 		if ( is_wp_error( $result ) ) {
 			@unlink( $state['sql'] ); // phpcs:ignore
-			return $this->fail( (int) $state['snapshot_id'], $result->get_error_message() );
+			$data = $result->get_error_data();
+			return $this->fail( (int) $state['snapshot_id'], $result->get_error_message(), (int) ( is_array( $data ) ? ( $data['status'] ?? 500 ) : 500 ) );
 		}
 		if ( false === $result || ! $eof ) {
 			return false;
@@ -178,7 +179,7 @@ final class Importer {
 		if ( preg_match( '/^CREATE TABLE `((?:[^`]|``)+)` \(/', $sql, $m ) ) {
 			$orig = str_replace( '``', '`', $m[1] );
 			if ( ! Database::belongs_to_site( $orig ) ) {
-				return new WP_Error( 'wp_chrono_import_prefix', sprintf( 'The dump contains table %s, which does not belong to this site (prefix %s).', $orig, $wpdb->prefix ) );
+				return new WP_Error( 'wp_chrono_import_prefix', sprintf( 'The dump contains table %s, which does not belong to this site (prefix %s).', $orig, $wpdb->prefix ), array( 'status' => 422 ) );
 			}
 			$copy = Schema::snapshot_table_name( (string) $id, $orig );
 			// Foreign keys and the table comment are restored from the manifest instead.
@@ -234,7 +235,7 @@ final class Importer {
 				return new WP_Error( 'wp_chrono_import_sql', "Could not import rows of {$orig}: {$wpdb->last_error}" );
 			}
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
-			$wpdb->query( $wpdb->prepare( 'UPDATE ' . Schema::snapshot_tables_table() . ' SET rows_copied = rows_copied + %d WHERE id = %d', $inserted, $state['tables'][ $orig ] ) );
+			$wpdb->query( $wpdb->prepare( 'UPDATE %i SET rows_copied = rows_copied + %d WHERE id = %d', Schema::snapshot_tables_table(), $inserted, $state['tables'][ $orig ] ) );
 			return true;
 		}
 
@@ -248,7 +249,7 @@ final class Importer {
 			return true; // Recorded; re-added on restore, never executed against a copy.
 		}
 
-		return new WP_Error( 'wp_chrono_import_statement', 'The dump contains a statement WP Chrono does not import: ' . mb_substr( $sql, 0, 80 ) );
+		return new WP_Error( 'wp_chrono_import_statement', 'The dump contains a statement WP Chrono does not import: ' . mb_substr( $sql, 0, 80 ), array( 'status' => 422 ) );
 	}
 
 	/**
@@ -283,8 +284,9 @@ final class Importer {
 		return true;
 	}
 
-	private function fail( int $id, string $message ): WP_Error {
+	/** 422 when the file itself is at fault (corrupt, truncated, refused), 500 for server-side failures. */
+	private function fail( int $id, string $message, int $status = 500 ): WP_Error {
 		$this->snapshots->delete( $id );
-		return new WP_Error( 'wp_chrono_import_failed', $message . ' The imported snapshot was discarded; nothing live was changed.', array( 'status' => 500 ) );
+		return new WP_Error( 'wp_chrono_import_failed', $message . ' The imported snapshot was discarded; nothing live was changed.', array( 'status' => $status ) );
 	}
 }

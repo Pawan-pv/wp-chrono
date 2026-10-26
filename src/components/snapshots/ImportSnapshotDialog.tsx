@@ -3,7 +3,7 @@ import { FileUp, Loader2, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { Progress } from '@/components/ui/progress';
-import { api, apiUpload } from '@/lib/api';
+import { api, ApiError, apiUpload } from '@/lib/api';
 import { formatBytes } from '@/lib/format';
 import type { ImportTick } from '@/types';
 
@@ -16,6 +16,8 @@ interface ImportSnapshotDialogProps {
 }
 
 const MAX_TICKS = 5000;
+/** Smallest part sent after the web server rejects larger ones (HTTP 413). */
+const MIN_CHUNK = 65536;
 
 /**
  * Upload a WP Chrono .sql.gz back into the site (chunked, so any size works
@@ -44,21 +46,33 @@ export function ImportSnapshotDialog({ open, onOpenChange, maxChunk, onImported 
     setError(null);
     setPhase('upload');
     try {
-      const size = Math.max(65536, maxChunk || 2 * 1024 * 1024);
+      let size = Math.max(MIN_CHUNK, maxChunk || 2 * 1024 * 1024);
       let upload = '';
       let tick: ImportTick | null = null;
-      for (let offset = 0; offset < file.size || offset === 0; offset += size) {
+      let offset = 0;
+      for (;;) {
         const last = offset + size >= file.size;
-        tick = await apiUpload<ImportTick>(
-          'snapshots/import/chunk',
-          'chunk',
-          file.slice(offset, offset + size),
-          { upload, offset: String(offset), final: last ? '1' : '0', name: file.name },
-          'chunk.part',
-        );
+        try {
+          tick = await apiUpload<ImportTick>(
+            'snapshots/import/chunk',
+            'chunk',
+            file.slice(offset, offset + size),
+            { upload, offset: String(offset), final: last ? '1' : '0', name: file.name },
+            'chunk.part',
+          );
+        } catch (e) {
+          // The web server (nginx client_max_body_size, Apache LimitRequestBody)
+          // can be stricter than PHP's upload limit: resend this part smaller.
+          if (e instanceof ApiError && e.status === 413 && size > MIN_CHUNK) {
+            size = Math.max(MIN_CHUNK, Math.floor(Math.min(size, file.size - offset) / 2));
+            continue;
+          }
+          throw e;
+        }
         upload = tick.upload ?? upload;
-        setProgress(Math.min(1, (offset + size) / file.size));
-        setStatus(last ? tick.message : `Uploaded ${formatBytes(Math.min(file.size, offset + size))} of ${formatBytes(file.size)}`);
+        offset = Math.min(file.size, offset + size);
+        setProgress(file.size ? offset / file.size : 1);
+        setStatus(last ? tick.message : `Uploaded ${formatBytes(offset)} of ${formatBytes(file.size)}`);
         if (last) break;
       }
       setPhase('import');

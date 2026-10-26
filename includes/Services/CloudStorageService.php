@@ -30,7 +30,7 @@ final class CloudStorageService {
 
 	const PROVIDERS = array(
 		'r2'     => array( 'label' => 'Cloudflare R2', 'endpoint' => 'https://<account-id>.r2.cloudflarestorage.com', 'region' => 'auto', 'path_style' => true ),
-		's3'     => array( 'label' => 'Amazon S3', 'endpoint' => 'https://s3.<region>.amazonaws.com', 'region' => 'us-east-1', 'path_style' => false ),
+		's3'     => array( 'label' => 'Amazon S3', 'endpoint' => 'https://s3.<region>.amazonaws.com', 'region' => 'us-east-1', 'path_style' => false ), // phpcs:ignore PluginCheck.CodeAnalysis.Offloading.OffloadedContent -- endpoint template for the user's own backup bucket; no assets are loaded from it.
 		'b2'     => array( 'label' => 'Backblaze B2', 'endpoint' => 'https://s3.<region>.backblazeb2.com', 'region' => 'us-west-004', 'path_style' => true ),
 		'custom' => array( 'label' => 'S3-compatible', 'endpoint' => '', 'region' => 'us-east-1', 'path_style' => true ),
 	);

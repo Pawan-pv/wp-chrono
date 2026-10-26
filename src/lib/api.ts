@@ -53,7 +53,11 @@ export async function apiUpload<T>(path: string, field: string, file: Blob, extr
   });
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new ApiError(payload?.message ?? `Upload failed with status ${response.status}`, response.status, payload?.code);
+    const fallback =
+      response.status === 413
+        ? 'The web server rejected the upload as too large (HTTP 413). Raise its request size limit (nginx client_max_body_size, Apache LimitRequestBody) and try again.'
+        : `Upload failed with status ${response.status}`;
+    throw new ApiError(payload?.message ?? fallback, response.status, payload?.code);
   }
   return payload as T;
 }

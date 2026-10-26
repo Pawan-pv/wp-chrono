@@ -25,7 +25,7 @@ foreach ( array( Schema::SNAPSHOT_TABLE_PREFIX, Schema::LEGACY_SNAPSHOT_TABLE_PR
 	);
 }
 foreach ( array_merge( $wpchrono_tables, Schema::internal_tables() ) as $wpchrono_table ) {
-	$wpdb->query( 'DROP TABLE IF EXISTS `' . str_replace( '`', '', $wpchrono_table ) . '`' );
+	$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $wpchrono_table ) );
 }
 // phpcs:enable
 
