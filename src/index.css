@@ -1,0 +1,142 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------------------------------------------------------------------------
+ * Full-bleed shell. This stylesheet is only enqueued on our own admin page,
+ * so these global selectors never touch other wp-admin screens.
+ * ------------------------------------------------------------------------ */
+body.toplevel_page_wp-chrono #wpcontent,
+body.toplevel_page_wp-chrono.auto-fold #wpcontent {
+  padding-left: 0;
+}
+body.toplevel_page_wp-chrono #wpbody-content {
+  padding-bottom: 0;
+}
+body.toplevel_page_wp-chrono #wpfooter {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * Design tokens (shadcn "zinc").
+ * ------------------------------------------------------------------------ */
+#wp-chrono-root {
+  --background: 0 0% 100%;
+  --foreground: 240 10% 3.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 240 10% 3.9%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 240 10% 3.9%;
+  --primary: 240 5.9% 10%;
+  --primary-foreground: 0 0% 98%;
+  --secondary: 240 4.8% 95.9%;
+  --secondary-foreground: 240 5.9% 10%;
+  --muted: 240 4.8% 95.9%;
+  --muted-foreground: 240 3.8% 46.1%;
+  --accent: 240 4.8% 95.9%;
+  --accent-foreground: 240 5.9% 10%;
+  --destructive: 0 72.2% 50.6%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 240 5.9% 90%;
+  --input: 240 5.9% 90%;
+  --ring: 240 5.9% 10%;
+  --radius: 0.5rem;
+}
+#wp-chrono-root.dark {
+  --background: 240 10% 3.9%;
+  --foreground: 0 0% 98%;
+  --card: 240 10% 3.9%;
+  --card-foreground: 0 0% 98%;
+  --popover: 240 10% 3.9%;
+  --popover-foreground: 0 0% 98%;
+  --primary: 0 0% 98%;
+  --primary-foreground: 240 5.9% 10%;
+  --secondary: 240 3.7% 15.9%;
+  --secondary-foreground: 0 0% 98%;
+  --muted: 240 3.7% 15.9%;
+  --muted-foreground: 240 5% 64.9%;
+  --accent: 240 3.7% 15.9%;
+  --accent-foreground: 0 0% 98%;
+  --destructive: 0 62.8% 50%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 240 3.7% 15.9%;
+  --input: 240 3.7% 15.9%;
+  --ring: 240 4.9% 83.9%;
+}
+
+/* ---------------------------------------------------------------------------
+ * Scoped reset (stands in for Tailwind preflight, which is disabled).
+ * ------------------------------------------------------------------------ */
+#wp-chrono-root {
+  min-height: calc(100vh - 32px);
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: theme('fontFamily.sans');
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  color-scheme: light;
+}
+#wp-chrono-root.dark {
+  color-scheme: dark;
+}
+@media screen and (max-width: 782px) {
+  #wp-chrono-root {
+    min-height: calc(100vh - 46px);
+  }
+}
+#wp-chrono-root *,
+#wp-chrono-root *::before,
+#wp-chrono-root *::after {
+  box-sizing: border-box;
+  border-width: 0;
+  border-style: solid;
+  border-color: hsl(var(--border));
+}
+#wp-chrono-root :where(h1, h2, h3, h4, h5, h6, p, ul, ol, figure, blockquote, pre) {
+  margin: 0;
+  padding: 0;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  color: inherit;
+}
+#wp-chrono-root :where(ul, ol) {
+  list-style: none;
+}
+#wp-chrono-root :where(a) {
+  color: inherit;
+  text-decoration: inherit;
+}
+#wp-chrono-root :where(a, button, input):focus {
+  box-shadow: none;
+  outline: none;
+}
+#wp-chrono-root :where(button, input, select, textarea) {
+  font: inherit;
+  color: inherit;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  min-height: 0;
+  line-height: inherit;
+}
+#wp-chrono-root :where(button, [role='button']) {
+  cursor: pointer;
+}
+#wp-chrono-root :where(svg, img) {
+  display: block;
+  vertical-align: middle;
+}
+#wp-chrono-root :where(code, kbd, pre) {
+  font-family: theme('fontFamily.mono');
+}
+
+@keyframes wpc-indeterminate {
+  0% {
+    left: -33%;
+  }
+  100% {
+    left: 100%;
+  }
+}

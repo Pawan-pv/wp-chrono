@@ -1,0 +1,8 @@
+node_modules/
+vendor/
+build/
+dist/
+*.map
+.DS_Store
+Thumbs.db
+*.secret

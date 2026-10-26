@@ -1,0 +1,1296 @@
+<?php
+/**
+ * WP Chrono — Emergency Recovery Script (ERS).
+ *
+ * A standalone, single-file recovery console. It NEVER loads WordPress, so it
+ * keeps working when a plugin or theme fatals, the admin is unreachable, or
+ * WordPress core is broken. It reads wp-config.php with PHP's tokenizer (the
+ * file is never executed) and talks to MySQL directly via mysqli (PDO fallback).
+ *
+ * Security: bcrypt password embedded at generation time, stateless HMAC-SHA256
+ * session cookies, CSRF tokens on every form, and a file-backed rate limiter
+ * (5 failed logins per 15 minutes per IP).
+ *
+ * DELETE THIS FILE WHEN YOU ARE DONE (there is a button for that).
+ *
+ * @package WPChrono
+ */
+
+/*__WPC_ARM__*/
+if ( ! defined( 'WPC_ERS_ARMED' ) ) {
+	// This is the unarmed template inside the plugin folder; never run it directly.
+	http_response_code( 404 );
+	exit;
+}
+
+const WPC_ERS_PASSWORD_HASH = '__WPC_PASSWORD_HASH__';
+const WPC_ERS_SECRET        = '__WPC_SECRET__';
+const WPC_ERS_CONFIG_HINT   = '__WPC_CONFIG_HINT__';
+const WPC_ERS_PREFIX_HINT   = '__WPC_PREFIX_HINT__';
+const WPC_ERS_CONTENT_HINT  = '__WPC_CONTENT_DIR_HINT__';
+const WPC_ERS_GENERATED_AT  = '__WPC_GENERATED_AT__';
+const WPC_ERS_SESSION_TTL   = 1800;
+const WPC_ERS_MAX_FAILURES  = 5;
+const WPC_ERS_LOCK_WINDOW   = 900;
+
+error_reporting( E_ALL );
+ini_set( 'display_errors', '0' );
+if ( function_exists( 'set_time_limit' ) ) {
+	@set_time_limit( 0 );
+}
+
+header( 'Content-Type: text/html; charset=utf-8' );
+header( 'Cache-Control: no-store, max-age=0' );
+header( 'X-Robots-Tag: noindex, nofollow' );
+header( 'X-Frame-Options: DENY' );
+header( 'X-Content-Type-Options: nosniff' );
+header( 'Referrer-Policy: no-referrer' );
+header( "Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; img-src data:; base-uri 'none'; frame-ancestors 'none'" );
+
+// ===========================================================================
+// Small helpers
+// ===========================================================================
+
+function wpc_e( $s ) {
+	return htmlspecialchars( (string) $s, ENT_QUOTES, 'UTF-8' );
+}
+
+function wpc_b64u( $s ) {
+	return rtrim( strtr( base64_encode( $s ), '+/', '-_' ), '=' );
+}
+
+function wpc_b64u_decode( $s ) {
+	return base64_decode( strtr( $s, '-_', '+/' ) );
+}
+
+function wpc_self_url( array $query = array() ) {
+	$path = strtok( (string) ( $_SERVER['REQUEST_URI'] ?? '' ), '?' );
+	return $path . ( $query ? '?' . http_build_query( $query ) : '' );
+}
+
+function wpc_is_https() {
+	return ( ! empty( $_SERVER['HTTPS'] ) && 'off' !== strtolower( (string) $_SERVER['HTTPS'] ) ) || 443 === (int) ( $_SERVER['SERVER_PORT'] ?? 0 );
+}
+
+function wpc_cookie( $name, $value, $ttl ) {
+	setcookie(
+		$name,
+		$value,
+		array(
+			'expires'  => $ttl > 0 ? time() + $ttl : time() - 3600,
+			'path'     => wpc_self_url(),
+			'secure'   => wpc_is_https(),
+			'httponly' => true,
+			'samesite' => 'Strict',
+		)
+	);
+}
+
+function wpc_redirect( $notice = '', $tone = 'ok' ) {
+	header( 'Location: ' . wpc_self_url( '' === $notice ? array() : array( 'notice' => $notice, 'tone' => $tone ) ), true, 303 );
+	exit;
+}
+
+function wpc_client_ip() {
+	// Deliberately only REMOTE_ADDR: forwarded headers are client-controlled.
+	return (string) ( $_SERVER['REMOTE_ADDR'] ?? 'unknown' );
+}
+
+// ===========================================================================
+// wp-config.php parsing (tokenizer — the file is never executed)
+// ===========================================================================
+
+function wpc_find_config() {
+	$candidates = array( WPC_ERS_CONFIG_HINT, __DIR__ . '/wp-config.php' );
+	// WordPress also allows wp-config.php one level above the web root, unless
+	// that directory is itself a WordPress install.
+	if ( ! file_exists( dirname( __DIR__ ) . '/wp-settings.php' ) ) {
+		$candidates[] = dirname( __DIR__ ) . '/wp-config.php';
+	}
+	foreach ( $candidates as $file ) {
+		if ( $file && is_readable( $file ) ) {
+			return $file;
+		}
+	}
+	return null;
+}
+
+function wpc_unquote( $literal ) {
+	$q    = $literal[0];
+	$body = substr( $literal, 1, -1 );
+	if ( "'" === $q ) {
+		return str_replace( array( "\\\\", "\\'" ), array( "\\", "'" ), $body );
+	}
+	return stripcslashes( $body );
+}
+
+/**
+ * Evaluates the small set of expressions found in wp-config define() values:
+ * string/number literals, true/false/null, and getenv()/getenv_docker() calls.
+ */
+function wpc_eval_tokens( array $tokens ) {
+	$t = array_values(
+		array_filter(
+			$tokens,
+			function ( $tok ) {
+				return ! ( is_array( $tok ) && in_array( $tok[0], array( T_WHITESPACE, T_COMMENT, T_DOC_COMMENT ), true ) );
+			}
+		)
+	);
+	if ( 1 === count( $t ) && is_array( $t[0] ) ) {
+		switch ( $t[0][0] ) {
+			case T_CONSTANT_ENCAPSED_STRING:
+				return wpc_unquote( $t[0][1] );
+			case T_LNUMBER:
+				return (int) $t[0][1];
+			case T_STRING:
+				$word = strtolower( $t[0][1] );
+				return 'true' === $word ? true : ( 'false' === $word ? false : null );
+		}
+	}
+	// getenv('X') / getenv_docker('X', 'default')
+	if ( isset( $t[0] ) && is_array( $t[0] ) && T_STRING === $t[0][0] && in_array( strtolower( $t[0][1] ), array( 'getenv', 'getenv_docker' ), true ) ) {
+		$args = array();
+		foreach ( $t as $tok ) {
+			if ( is_array( $tok ) && T_CONSTANT_ENCAPSED_STRING === $tok[0] ) {
+				$args[] = wpc_unquote( $tok[1] );
+			}
+		}
+		$env = isset( $args[0] ) ? getenv( $args[0] ) : false;
+		if ( false === $env && isset( $args[0] ) && is_readable( '/run/secrets/' . $args[0] ) ) {
+			$env = trim( (string) file_get_contents( '/run/secrets/' . $args[0] ) );
+		}
+		return false !== $env ? $env : ( $args[1] ?? null );
+	}
+	return null;
+}
+
+function wpc_parse_config( $file ) {
+	$tokens = token_get_all( (string) file_get_contents( $file ) );
+	$out    = array( 'defines' => array(), 'table_prefix' => null );
+	$n      = count( $tokens );
+	for ( $i = 0; $i < $n; $i++ ) {
+		$tok = $tokens[ $i ];
+		if ( is_array( $tok ) && T_VARIABLE === $tok[0] && '$table_prefix' === $tok[1] ) {
+			for ( $j = $i + 1; $j < $n && ';' !== $tokens[ $j ]; $j++ ) {
+				if ( is_array( $tokens[ $j ] ) && T_CONSTANT_ENCAPSED_STRING === $tokens[ $j ][0] ) {
+					$out['table_prefix'] = wpc_unquote( $tokens[ $j ][1] );
+					break;
+				}
+			}
+			continue;
+		}
+		if ( ! is_array( $tok ) || T_STRING !== $tok[0] || 'define' !== strtolower( $tok[1] ) ) {
+			continue;
+		}
+		// define ( 'NAME' , <expr> )
+		$j = $i + 1;
+		while ( $j < $n && is_array( $tokens[ $j ] ) && T_WHITESPACE === $tokens[ $j ][0] ) {
+			$j++;
+		}
+		if ( '(' !== ( $tokens[ $j ] ?? null ) ) {
+			continue;
+		}
+		$depth = 0;
+		$args  = array( array() );
+		for ( $j++; $j < $n; $j++ ) {
+			$t = $tokens[ $j ];
+			if ( '(' === $t ) {
+				$depth++;
+			} elseif ( ')' === $t ) {
+				if ( 0 === $depth ) {
+					break;
+				}
+				$depth--;
+			} elseif ( ',' === $t && 0 === $depth ) {
+				$args[] = array();
+				continue;
+			}
+			$args[ count( $args ) - 1 ][] = $t;
+		}
+		if ( count( $args ) >= 2 ) {
+			$name = wpc_eval_tokens( $args[0] );
+			if ( is_string( $name ) ) {
+				$out['defines'][ $name ] = wpc_eval_tokens( $args[1] );
+			}
+		}
+		$i = $j;
+	}
+	return $out;
+}
+
+/**
+ * DB_HOST forms: "host", "host:3307", "host:/path/mysql.sock", ":/path.sock",
+ * "/path.sock", "[::1]:3306", "p:host" (persistent prefix).
+ */
+function wpc_parse_host( $host ) {
+	$host   = preg_replace( '/^p:/', '', trim( (string) $host ) );
+	$result = array( 'host' => 'localhost', 'port' => null, 'socket' => null );
+	if ( '' === $host ) {
+		return $result;
+	}
+	if ( '/' === $host[0] ) {
+		$result['socket'] = $host;
+		return $result;
+	}
+	if ( preg_match( '/^\[([^\]]+)\](?::(\d+))?$/', $host, $m ) ) {
+		$result['host'] = $m[1];
+		$result['port'] = isset( $m[2] ) ? (int) $m[2] : null;
+		return $result;
+	}
+	$parts = explode( ':', $host, 2 );
+	if ( '' !== $parts[0] ) {
+		$result['host'] = $parts[0];
+	}
+	if ( isset( $parts[1] ) && '' !== $parts[1] ) {
+		if ( preg_match( '/^\d+$/', $parts[1] ) ) {
+			$result['port'] = (int) $parts[1];
+		} else {
+			$result['socket'] = $parts[1];
+		}
+	}
+	return $result;
+}
+
+// ===========================================================================
+// Database (mysqli, PDO fallback)
+// ===========================================================================
+
+final class Wpc_Ers_Db {
+	public $error = '';
+	public $driver = '';
+	private $mysqli;
+	private $pdo;
+
+	public function __construct( array $cfg ) {
+		$h = wpc_parse_host( $cfg['DB_HOST'] ?? 'localhost' );
+		if ( function_exists( 'mysqli_init' ) ) {
+			mysqli_report( MYSQLI_REPORT_OFF );
+			$m = mysqli_init();
+			if ( @$m->real_connect( $h['host'], (string) ( $cfg['DB_USER'] ?? '' ), (string) ( $cfg['DB_PASSWORD'] ?? '' ), (string) ( $cfg['DB_NAME'] ?? '' ), $h['port'] ?: null, $h['socket'] ) ) {
+				$m->set_charset( 'utf8mb4' );
+				$this->mysqli = $m;
+				$this->driver = 'mysqli';
+				return;
+			}
+			$this->error = 'mysqli: ' . mysqli_connect_error();
+		}
+		if ( class_exists( 'PDO' ) && in_array( 'mysql', PDO::getAvailableDrivers(), true ) ) {
+			$dsn = 'mysql:dbname=' . ( $cfg['DB_NAME'] ?? '' ) . ';charset=utf8mb4;' . ( $h['socket'] ? 'unix_socket=' . $h['socket'] : 'host=' . $h['host'] . ( $h['port'] ? ';port=' . $h['port'] : '' ) );
+			try {
+				$this->pdo    = new PDO( $dsn, (string) ( $cfg['DB_USER'] ?? '' ), (string) ( $cfg['DB_PASSWORD'] ?? '' ), array( PDO::ATTR_ERRMODE => PDO::ERRMODE_SILENT ) );
+				$this->driver = 'pdo';
+				$this->error  = '';
+			} catch ( Exception $e ) {
+				$this->error .= ' | PDO: ' . $e->getMessage();
+			}
+		}
+	}
+
+	public function ok() {
+		return null !== $this->mysqli || null !== $this->pdo;
+	}
+
+	public function q( $value ) {
+		if ( null === $value ) {
+			return 'NULL';
+		}
+		return $this->mysqli ? "'" . $this->mysqli->real_escape_string( (string) $value ) . "'" : $this->pdo->quote( (string) $value );
+	}
+
+	public static function id( $name ) {
+		return '`' . str_replace( '`', '``', $name ) . '`';
+	}
+
+	public function exec( $sql ) {
+		if ( $this->mysqli ) {
+			$ok = $this->mysqli->query( $sql );
+			if ( false === $ok ) {
+				$this->error = $this->mysqli->error;
+			}
+			return false !== $ok;
+		}
+		$ok = $this->pdo->exec( $sql );
+		if ( false === $ok ) {
+			$this->error = implode( ' ', $this->pdo->errorInfo() );
+		}
+		return false !== $ok;
+	}
+
+	public function rows( $sql ) {
+		if ( $this->mysqli ) {
+			$r = $this->mysqli->query( $sql );
+			if ( ! $r instanceof mysqli_result ) {
+				$this->error = $this->mysqli->error;
+				return array();
+			}
+			return $r->fetch_all( MYSQLI_ASSOC );
+		}
+		$st = $this->pdo->query( $sql );
+		return $st ? $st->fetchAll( PDO::FETCH_ASSOC ) : array();
+	}
+
+	public function val( $sql ) {
+		$rows = $this->rows( $sql );
+		return $rows ? reset( $rows[0] ) : null;
+	}
+
+	public function insert_id() {
+		return $this->mysqli ? (int) $this->mysqli->insert_id : (int) $this->pdo->lastInsertId();
+	}
+
+	public function server() {
+		return (string) $this->val( 'SELECT VERSION()' );
+	}
+}
+
+// ===========================================================================
+// Authentication: bcrypt + HMAC session + CSRF + rate limiting
+// ===========================================================================
+
+function wpc_hmac( $data ) {
+	// The password hash is part of the key, so regenerating the script with a
+	// new password invalidates every existing session.
+	return hash_hmac( 'sha256', $data, WPC_ERS_SECRET . WPC_ERS_PASSWORD_HASH );
+}
+
+function wpc_session() {
+	$raw = (string) ( $_COOKIE['wpc_ers'] ?? '' );
+	if ( 1 !== substr_count( $raw, '.' ) ) {
+		return null;
+	}
+	list( $payload, $sig ) = explode( '.', $raw, 2 );
+	if ( ! hash_equals( wpc_hmac( $payload ), (string) wpc_b64u_decode( $sig ) ) ) {
+		return null;
+	}
+	$data = json_decode( (string) wpc_b64u_decode( $payload ), true );
+	if ( ! is_array( $data ) || (int) ( $data['exp'] ?? 0 ) < time() || empty( $data['sid'] ) ) {
+		return null;
+	}
+	return $data;
+}
+
+/** Issues (or, with $sid, slides the expiry of) the signed session cookie. */
+function wpc_start_session( $sid = null ) {
+	$data    = array( 'sid' => $sid ?: bin2hex( random_bytes( 16 ) ), 'exp' => time() + WPC_ERS_SESSION_TTL );
+	$payload = wpc_b64u( (string) json_encode( $data ) );
+	wpc_cookie( 'wpc_ers', $payload . '.' . wpc_b64u( wpc_hmac( $payload ) ), WPC_ERS_SESSION_TTL );
+	return $data;
+}
+
+function wpc_csrf( $sid ) {
+	return wpc_hmac( 'csrf|' . $sid );
+}
+
+/** Pre-login CSRF: double-submit cookie bound to the secret. */
+function wpc_login_token() {
+	$seed = (string) ( $_COOKIE['wpc_ers_pre'] ?? '' );
+	if ( ! preg_match( '/^[a-f0-9]{32}$/', $seed ) ) {
+		$seed = bin2hex( random_bytes( 16 ) );
+		wpc_cookie( 'wpc_ers_pre', $seed, 3600 );
+		$_COOKIE['wpc_ers_pre'] = $seed;
+	}
+	return wpc_hmac( 'login|' . $seed );
+}
+
+function wpc_rate_file() {
+	return rtrim( sys_get_temp_dir(), '/\\' ) . '/wpc-ers-' . substr( hash( 'sha256', __FILE__ . WPC_ERS_SECRET ), 0, 16 ) . '.json';
+}
+
+/**
+ * Reads, optionally mutates, and writes the failure log under an exclusive lock.
+ *
+ * @return array<string,int[]> IP => failure timestamps within the window.
+ */
+function wpc_rate( $mutate = null ) {
+	$fh = @fopen( wpc_rate_file(), 'c+' );
+	if ( ! $fh ) {
+		return array();
+	}
+	flock( $fh, LOCK_EX );
+	$data = json_decode( (string) stream_get_contents( $fh ), true );
+	$data = is_array( $data ) ? $data : array();
+	$now  = time();
+	foreach ( $data as $ip => $times ) {
+		$data[ $ip ] = array_values(
+			array_filter(
+				(array) $times,
+				function ( $t ) use ( $now ) {
+					return $t > $now - WPC_ERS_LOCK_WINDOW;
+				}
+			)
+		);
+		if ( ! $data[ $ip ] ) {
+			unset( $data[ $ip ] );
+		}
+	}
+	if ( $mutate ) {
+		$data = $mutate( $data );
+		ftruncate( $fh, 0 );
+		rewind( $fh );
+		fwrite( $fh, (string) json_encode( $data ) );
+	}
+	flock( $fh, LOCK_UN );
+	fclose( $fh );
+	return $data;
+}
+
+function wpc_locked_for() {
+	$times = wpc_rate()[ wpc_client_ip() ] ?? array();
+	if ( count( $times ) < WPC_ERS_MAX_FAILURES ) {
+		return 0;
+	}
+	return max( 1, (int) ceil( ( min( $times ) + WPC_ERS_LOCK_WINDOW - time() ) / 60 ) );
+}
+
+// ===========================================================================
+// WordPress data access (no WordPress loaded)
+// ===========================================================================
+
+function wpc_get_option( Wpc_Ers_Db $db, $prefix, $name ) {
+	return $db->val( 'SELECT option_value FROM ' . Wpc_Ers_Db::id( $prefix . 'options' ) . ' WHERE option_name = ' . $db->q( $name ) . ' LIMIT 1' );
+}
+
+function wpc_set_option( Wpc_Ers_Db $db, $prefix, $name, $value ) {
+	$table = Wpc_Ers_Db::id( $prefix . 'options' );
+	if ( null === wpc_get_option( $db, $prefix, $name ) ) {
+		return $db->exec( "INSERT INTO {$table} (option_name, option_value, autoload) VALUES (" . $db->q( $name ) . ',' . $db->q( $value ) . ",'yes')" );
+	}
+	return $db->exec( "UPDATE {$table} SET option_value = " . $db->q( $value ) . ' WHERE option_name = ' . $db->q( $name ) );
+}
+
+/** Safe unserialize: never instantiates classes, so broken plugin classes can't autoload-fatal. */
+function wpc_unserialize( $raw ) {
+	if ( ! is_string( $raw ) ) {
+		return $raw;
+	}
+	$v = @unserialize( $raw, array( 'allowed_classes' => false ) );
+	return ( false === $v && 'b:0;' !== $raw ) ? null : $v;
+}
+
+function wpc_file_headers( $file, array $fields ) {
+	$data = (string) @file_get_contents( $file, false, null, 0, 8192 );
+	$out  = array();
+	foreach ( $fields as $key => $label ) {
+		$out[ $key ] = preg_match( '/^[ \t\/*#@]*' . preg_quote( $label, '/' ) . ':(.*)$/mi', $data, $m ) ? trim( preg_replace( '/\s*(?:\*\/|\?>).*/', '', $m[1] ) ) : '';
+	}
+	return $out;
+}
+
+function wpc_plugins( $content_dir ) {
+	$dir     = $content_dir . '/plugins';
+	$plugins = array();
+	foreach ( (array) @scandir( $dir ) as $entry ) {
+		if ( '' === $entry || '.' === $entry[0] ) {
+			continue;
+		}
+		$files = is_dir( "{$dir}/{$entry}" ) ? glob( "{$dir}/{$entry}/*.php" ) : ( '.php' === substr( $entry, -4 ) ? array( "{$dir}/{$entry}" ) : array() );
+		foreach ( (array) $files as $file ) {
+			$h = wpc_file_headers( $file, array( 'name' => 'Plugin Name', 'version' => 'Version' ) );
+			if ( '' !== $h['name'] ) {
+				$plugins[ ltrim( substr( $file, strlen( $dir ) ), '/' ) ] = $h;
+				break;
+			}
+		}
+	}
+	ksort( $plugins );
+	return $plugins;
+}
+
+function wpc_themes( $content_dir ) {
+	$themes = array();
+	foreach ( (array) @glob( $content_dir . '/themes/*/style.css' ) as $css ) {
+		$h = wpc_file_headers( $css, array( 'name' => 'Theme Name', 'template' => 'Template', 'version' => 'Version' ) );
+		if ( '' !== $h['name'] ) {
+			$themes[ basename( dirname( $css ) ) ] = $h;
+		}
+	}
+	ksort( $themes );
+	return $themes;
+}
+
+function wpc_debug_log_path( array $defines, $content_dir ) {
+	$log = $defines['WP_DEBUG_LOG'] ?? null;
+	return is_string( $log ) && '' !== $log ? $log : $content_dir . '/debug.log';
+}
+
+/** Last $lines lines of a file, reading at most 512 KB from the end. */
+function wpc_tail( $file, $lines = 100 ) {
+	if ( ! is_readable( $file ) ) {
+		return array();
+	}
+	$size = filesize( $file );
+	$fh   = fopen( $file, 'rb' );
+	fseek( $fh, max( 0, $size - 524288 ) );
+	$data = (string) stream_get_contents( $fh );
+	fclose( $fh );
+	$all = preg_split( '/\r?\n/', rtrim( $data ) );
+	return array_slice( $all, -$lines );
+}
+
+/** Plugin / theme named in the most recent fatal error in the log. */
+function wpc_culprit( array $lines ) {
+	for ( $i = count( $lines ) - 1; $i >= 0; $i-- ) {
+		if ( ! preg_match( '/PHP (Fatal error|Parse error)|Uncaught/', $lines[ $i ] ) ) {
+			continue;
+		}
+		if ( preg_match( '#/wp-content/(plugins|mu-plugins|themes)/([^/\s:]+)#', $lines[ $i ], $m ) ) {
+			return array( 'type' => 'themes' === $m[1] ? 'theme' : ( 'mu-plugins' === $m[1] ? 'mu-plugin' : 'plugin' ), 'slug' => $m[2], 'line' => $lines[ $i ] );
+		}
+		return array( 'type' => 'unknown', 'slug' => '', 'line' => $lines[ $i ] );
+	}
+	return null;
+}
+
+function wpc_snapshot_name( $tag, $orig ) {
+	$head = '_wpc_' . $tag . '_' . substr( md5( $orig ), 0, 8 ) . '_';
+	return $head . substr( $orig, 0, 64 - strlen( $head ) );
+}
+
+/**
+ * Snapshots from the tracking tables, or — when those are missing or damaged —
+ * reconstructed from the self-describing JSON comments on `_wpc_*` tables.
+ */
+function wpc_snapshots( Wpc_Ers_Db $db, $prefix, $multisite = false ) {
+	$snapshots = array();
+	$track     = $prefix . 'wpchrono_snapshots';
+	$track_t   = $prefix . 'wpchrono_snapshot_tables';
+	$have      = $db->val( "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ('" . addslashes( $track ) . "','" . addslashes( $track_t ) . "')" );
+
+	if ( 2 === (int) $have ) {
+		foreach ( $db->rows( 'SELECT * FROM ' . Wpc_Ers_Db::id( $track ) . " WHERE status = 'ready' ORDER BY id DESC" ) as $s ) {
+			$tables = array();
+			foreach ( $db->rows( 'SELECT source_table, snapshot_table, orig_comment, foreign_keys FROM ' . Wpc_Ers_Db::id( $track_t ) . ' WHERE snapshot_id = ' . (int) $s['id'] . " AND status = 'done'" ) as $t ) {
+				$tables[ $t['source_table'] ] = array( 'snap' => $t['snapshot_table'], 'comment' => (string) $t['orig_comment'], 'fks' => (array) json_decode( (string) $t['foreign_keys'], true ) );
+			}
+			if ( $tables ) {
+				$meta  = json_decode( (string) $s['meta'], true );
+				$files = is_array( $meta['rollback']['files'] ?? null ) ? array_values( $meta['rollback']['files'] ) : array();
+				$snapshots[ (int) $s['id'] ] = array( 'id' => (int) $s['id'], 'label' => $s['label'], 'trigger' => $s['trigger_type'], 'created' => $s['created_at'] . ' UTC', 'rows' => (int) $s['row_count'], 'tables' => $tables, 'files' => $files, 'source' => 'tracking table' );
+			}
+		}
+		if ( $snapshots ) {
+			return $snapshots;
+		}
+	}
+
+	$candidates = $db->rows( "SELECT TABLE_NAME AS n, TABLE_COMMENT AS c, TABLE_ROWS AS r, CREATE_TIME AS t FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE '\\_wpc\\_%'" );
+	foreach ( $candidates as $row ) {
+		$meta = json_decode( (string) $row['c'], true );
+		if ( ! is_array( $meta ) || 1 !== ( $meta['wpc'] ?? null ) || ! isset( $meta['snap'], $meta['orig'] ) || 0 !== strpos( $meta['orig'], $prefix ) || ! preg_match( '/^\d+$/', (string) $meta['snap'] ) ) {
+			continue;
+		}
+		// Multisite main site: wp_2_* copies belong to subsite 2's own snapshot #N, not ours.
+		if ( $multisite && preg_match( '/^' . preg_quote( $prefix, '/' ) . '\d+_/', $meta['orig'] ) ) {
+			continue;
+		}
+		$id = (int) $meta['snap'];
+		if ( ! isset( $snapshots[ $id ] ) ) {
+			$snapshots[ $id ] = array( 'id' => $id, 'label' => '(reconstructed)', 'trigger' => '?', 'created' => (string) $row['t'], 'rows' => 0, 'tables' => array(), 'files' => array(), 'source' => 'table comments' );
+		}
+		$snapshots[ $id ]['rows']                    += (int) $row['r'];
+		$snapshots[ $id ]['tables'][ $meta['orig'] ] = array( 'snap' => $row['n'], 'comment' => '', 'fks' => is_array( $meta['fk'] ?? null ) ? $meta['fk'] : array() );
+	}
+	krsort( $snapshots );
+	return $snapshots;
+}
+
+/**
+ * Atomic restore straight from SQL: copy into staging, one RENAME TABLE swap,
+ * drop parked tables, re-add foreign keys — all with FOREIGN_KEY_CHECKS = 0.
+ */
+function wpc_restore( Wpc_Ers_Db $db, array $snapshot, array $skip = array() ) {
+	$job = substr( bin2hex( random_bytes( 4 ) ), 0, 6 );
+	// Multisite main site: network-wide tables (users, blogs…) are kept unless opted in.
+	$snapshot['tables'] = array_diff_key( $snapshot['tables'], array_flip( $skip ) );
+	$live = array();
+	foreach ( $db->rows( 'SHOW TABLES' ) as $r ) {
+		$live[ (string) reset( $r ) ] = true;
+	}
+	$db->exec( 'SET FOREIGN_KEY_CHECKS = 0' );
+	$renames = array();
+	$rows    = 0;
+	foreach ( $snapshot['tables'] as $orig => $t ) {
+		$stg  = wpc_snapshot_name( 'stg_' . $job, $orig );
+		$cols = $db->rows( 'SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ' . $db->q( $t['snap'] ) . " AND EXTRA NOT LIKE '%GENERATED%' ORDER BY ORDINAL_POSITION" );
+		$list = implode( ',', array_map( function ( $c ) { return Wpc_Ers_Db::id( $c['COLUMN_NAME'] ); }, $cols ) );
+		$ok   = $db->exec( 'DROP TABLE IF EXISTS ' . Wpc_Ers_Db::id( $stg ) )
+			&& $db->exec( 'CREATE TABLE ' . Wpc_Ers_Db::id( $stg ) . ' LIKE ' . Wpc_Ers_Db::id( $t['snap'] ) )
+			&& $db->exec( 'INSERT INTO ' . Wpc_Ers_Db::id( $stg ) . " ({$list}) SELECT {$list} FROM " . Wpc_Ers_Db::id( $t['snap'] ) )
+			&& $db->exec( 'ALTER TABLE ' . Wpc_Ers_Db::id( $stg ) . ' COMMENT = ' . $db->q( $t['comment'] ) );
+		if ( ! $ok ) {
+			$error = $db->error;
+			foreach ( $db->rows( "SHOW TABLES LIKE '\\_wpc\\_stg\\_{$job}\\_%'" ) as $r ) {
+				$db->exec( 'DROP TABLE ' . Wpc_Ers_Db::id( reset( $r ) ) );
+			}
+			$db->exec( 'SET FOREIGN_KEY_CHECKS = 1' );
+			return array( false, "Staging {$orig} failed: {$error}. The live database was not changed." );
+		}
+		$rows += (int) $db->val( 'SELECT COUNT(*) FROM ' . Wpc_Ers_Db::id( $stg ) );
+		if ( isset( $live[ $orig ] ) ) {
+			$renames[] = Wpc_Ers_Db::id( $orig ) . ' TO ' . Wpc_Ers_Db::id( wpc_snapshot_name( 'old_' . $job, $orig ) );
+		}
+		$renames[] = Wpc_Ers_Db::id( $stg ) . ' TO ' . Wpc_Ers_Db::id( $orig );
+	}
+
+	$started = microtime( true );
+	if ( ! $db->exec( 'RENAME TABLE ' . implode( ', ', $renames ) ) ) {
+		$error = $db->error;
+		$db->exec( 'SET FOREIGN_KEY_CHECKS = 1' );
+		return array( false, "Atomic swap failed: {$error}. The live database was not changed." );
+	}
+	$swap_ms = (int) round( ( microtime( true ) - $started ) * 1000 );
+	foreach ( $db->rows( "SHOW TABLES LIKE '\\_wpc\\_old\\_{$job}\\_%'" ) as $r ) {
+		$db->exec( 'DROP TABLE ' . Wpc_Ers_Db::id( reset( $r ) ) );
+	}
+	$fks = 0;
+	foreach ( $snapshot['tables'] as $orig => $t ) {
+		foreach ( $t['fks'] as $fk ) {
+			$fks += $db->exec( 'ALTER TABLE ' . Wpc_Ers_Db::id( $orig ) . ' ADD ' . $fk ) ? 1 : 0;
+		}
+	}
+	$db->exec( 'SET FOREIGN_KEY_CHECKS = 1' );
+	return array( true, sprintf( 'Restored snapshot #%d: %d tables, %s rows, atomic swap %d ms%s%s.', $snapshot['id'], count( $snapshot['tables'] ), number_format( $rows ), $swap_ms, $fks ? ", {$fks} foreign keys re-created" : '', $skip ? ', network tables kept' : '' ) );
+}
+
+/**
+ * Network-wide tables to leave alone on a multisite main site, unless the
+ * restore form's "Include network users & blogs" box was ticked.
+ *
+ * @return string[]
+ */
+function wpc_network_skip( array $defines, $prefix ) {
+	if ( empty( $defines['MULTISITE'] ) || ! empty( $_POST['include_network'] ) ) {
+		return array();
+	}
+	return array_map(
+		function ( $t ) use ( $prefix ) {
+			return $prefix . $t;
+		},
+		array( 'users', 'usermeta', 'blogs', 'site', 'sitemeta', 'blogmeta', 'signups' )
+	);
+}
+
+// ===========================================================================
+// Update rollback: plugin / theme folders archived before an update
+// (standalone port of Services\Snapshot\FileArchive)
+// ===========================================================================
+
+/** `{wp-content}/{storage}/rollbacks/`, from the sealed storage folder WP Chrono recorded. */
+function wpc_rollback_dir( Wpc_Ers_Db $db, $prefix, $content_dir ) {
+	$name = (string) wpc_get_option( $db, $prefix, 'wp_chrono_storage_dir' );
+	return preg_match( '/^wp-chrono-[A-Za-z0-9]{16}$/', $name ) ? $content_dir . '/' . $name . '/rollbacks/' : '';
+}
+
+/** Newest snapshot that carries plugin / theme archives. */
+function wpc_last_update( array $snapshots ) {
+	foreach ( $snapshots as $s ) {
+		if ( ! empty( $s['files'] ) ) {
+			return $s;
+		}
+	}
+	return null;
+}
+
+function wpc_rmtree( $path ) {
+	if ( '' === $path || ( ! file_exists( $path ) && ! is_link( $path ) ) ) {
+		return;
+	}
+	if ( is_link( $path ) || is_file( $path ) ) {
+		@unlink( $path );
+		return;
+	}
+	$items = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $path, FilesystemIterator::SKIP_DOTS ), RecursiveIteratorIterator::CHILD_FIRST );
+	foreach ( $items as $item ) {
+		( $item->isDir() && ! $item->isLink() ) ? @rmdir( $item->getPathname() ) : @unlink( $item->getPathname() );
+	}
+	@rmdir( $path );
+}
+
+/**
+ * Verifies each archive's SHA-256, extracts it and parks it next to its
+ * folder as `.wpc-new-{job}-{slug}`. Nothing live changes; on failure every
+ * staged copy is removed.
+ *
+ * @return array{0:bool,1:array|string} [ok, staged items | error message]
+ */
+function wpc_stage_files( array $entries, $dir, $content_dir, $job ) {
+	if ( ! class_exists( 'ZipArchive' ) ) {
+		return array( false, 'PHP\'s zip extension is not available, so plugin files cannot be reverted here.' );
+	}
+	$staged = array();
+	$fail   = function ( $message ) use ( &$staged ) {
+		foreach ( $staged as $item ) {
+			wpc_rmtree( $item['new'] );
+		}
+		return array( false, $message );
+	};
+	foreach ( $entries as $i => $e ) {
+		$slug   = (string) ( $e['slug'] ?? '' );
+		$single = ! empty( $e['single'] );
+		$target = str_replace( '\\', '/', (string) ( $e['target'] ?? '' ) );
+		// The recorded path may come from another machine layout; fall back to this content dir.
+		if ( '' === $target || ! is_dir( dirname( $target ) ) ) {
+			$target = $content_dir . '/' . ( 'theme' === ( $e['type'] ?? '' ) ? 'themes' : 'plugins' ) . '/' . $slug;
+		}
+		$zip_file = $dir . basename( (string) ( $e['zip'] ?? '' ) );
+		if ( '' === $slug || basename( $target ) !== basename( $slug ) || ! is_dir( dirname( $target ) ) ) {
+			return $fail( "The rollback manifest for {$slug} is invalid." );
+		}
+		if ( ! is_file( $zip_file ) ) {
+			return $fail( "The archive of {$slug} is missing from WP Chrono's storage folder." );
+		}
+		if ( ! hash_equals( (string) ( $e['sha256'] ?? '' ), (string) hash_file( 'sha256', $zip_file ) ) ) {
+			return $fail( "The archive of {$slug} failed its SHA-256 check; nothing was changed." );
+		}
+		$root = basename( $slug );
+		$work = $content_dir . '/upgrade/wpc-rollback-' . $job . '/' . $i . '/';
+		@mkdir( $work, 0755, true );
+		$zip = new ZipArchive();
+		if ( true !== $zip->open( $zip_file ) ) {
+			return $fail( "Could not open the archive of {$slug}." );
+		}
+		for ( $n = 0; $n < $zip->numFiles; $n++ ) {
+			$name = str_replace( '\\', '/', (string) $zip->getNameIndex( $n ) );
+			$ok   = '' !== $name && '/' !== $name[0] && ! preg_match( '#(^|/)\.\.(/|$)#', $name )
+				&& ( $single ? $name === $root : ( $name === $root . '/' || 0 === strpos( $name, $root . '/' ) ) );
+			if ( ! $ok ) {
+				$zip->close();
+				return $fail( "The archive of {$slug} contains unexpected paths; nothing was changed." );
+			}
+		}
+		$extracted = $zip->extractTo( $work );
+		$zip->close();
+		$expected = $single ? $work . $root : ( 'theme' === $e['type'] ? $work . $root . '/style.css' : $work . $root . '/' . basename( (string) $e['file'] ) );
+		if ( ! $extracted || ! file_exists( $expected ) ) {
+			return $fail( "Extracting {$slug} failed; nothing was changed." );
+		}
+		$new = dirname( $target ) . '/.wpc-new-' . $job . '-' . $root;
+		wpc_rmtree( $new );
+		if ( ! @rename( $work . $root, $new ) ) {
+			return $fail( "Could not stage {$slug} next to its folder; nothing was changed." );
+		}
+		$staged[] = array(
+			'slug'         => $slug,
+			'type'         => (string) $e['type'],
+			'name'         => (string) ( $e['name'] ?? '' ),
+			'target'       => $target,
+			'new'          => $new,
+			'old'          => dirname( $target ) . '/.wpc-old-' . $job . '-' . $root,
+			'from'         => (string) ( $e['new_version'] ?? '' ),
+			'to'           => (string) ( $e['old_version'] ?? '' ),
+			'installed_to' => $single ? str_replace( '\\', '/', (string) ( $e['installed_to'] ?? '' ) ) : '',
+		);
+	}
+	wpc_rmtree( $content_dir . '/upgrade/wpc-rollback-' . $job );
+	return array( true, $staged );
+}
+
+/** Two renames per folder (live → parked, staged → live); the live folder is put back if the second fails. */
+function wpc_commit_files( array $staged ) {
+	$done = array();
+	foreach ( $staged as $item ) {
+		$parked = false;
+		if ( file_exists( $item['target'] ) || is_link( $item['target'] ) ) {
+			if ( ! @rename( $item['target'], $item['old'] ) ) {
+				wpc_rmtree( $item['new'] );
+				continue;
+			}
+			$parked = true;
+		}
+		if ( ! @rename( $item['new'], $item['target'] ) ) {
+			if ( $parked ) {
+				@rename( $item['old'], $item['target'] );
+			}
+			wpc_rmtree( $item['new'] );
+			continue;
+		}
+		wpc_rmtree( $item['old'] );
+		$done[] = $item['slug'] . ( '' !== $item['to'] ? ( '' !== $item['from'] ? " {$item['from']} → {$item['to']}" : " → {$item['to']}" ) : '' );
+
+		// A single-file plugin's update was installed into a new folder; remove it
+		// (only if it sits next to the file and holds the same plugin).
+		$stray = rtrim( $item['installed_to'], '/' );
+		if ( '' !== $stray && $stray !== $item['target'] && dirname( $stray ) === dirname( $item['target'] ) && is_dir( $stray ) && ! is_link( $stray ) && '' !== $item['name'] ) {
+			foreach ( (array) glob( $stray . '/*.php' ) as $file ) {
+				if ( wpc_file_headers( $file, array( 'n' => 'Plugin Name' ) )['n'] === $item['name'] ) {
+					$parked = dirname( $stray ) . '/.wpc-old-stray-' . basename( $stray );
+					if ( @rename( $stray, $parked ) ) {
+						wpc_rmtree( $parked );
+					}
+					break;
+				}
+			}
+		}
+	}
+	if ( function_exists( 'opcache_reset' ) && filter_var( ini_get( 'opcache.enable' ), FILTER_VALIDATE_BOOLEAN ) ) {
+		@opcache_reset();
+	}
+	return $done;
+}
+
+// ===========================================================================
+// Bootstrap
+// ===========================================================================
+
+$config_file = wpc_find_config();
+$config      = $config_file ? wpc_parse_config( $config_file ) : array( 'defines' => array(), 'table_prefix' => null );
+$defines     = $config['defines'];
+$prefix      = (string) ( $config['table_prefix'] ?? WPC_ERS_PREFIX_HINT );
+$content_dir = is_string( $defines['WP_CONTENT_DIR'] ?? null ) ? $defines['WP_CONTENT_DIR'] : ( is_dir( __DIR__ . '/wp-content' ) ? __DIR__ . '/wp-content' : WPC_ERS_CONTENT_HINT );
+$session     = wpc_session();
+$method      = (string) ( $_SERVER['REQUEST_METHOD'] ?? 'GET' );
+$action      = (string) ( $_POST['action'] ?? '' );
+$error       = '';
+
+// --- Login / logout -----------------------------------------------------------
+if ( 'POST' === $method && 'login' === $action ) {
+	$locked = wpc_locked_for();
+	if ( $locked ) {
+		http_response_code( 429 );
+		$error = "Too many failed attempts. Try again in {$locked} minute(s).";
+	} elseif ( ! hash_equals( wpc_login_token(), (string) ( $_POST['csrf'] ?? '' ) ) ) {
+		http_response_code( 403 );
+		$error = 'Your login form expired. Please try again.';
+	} elseif ( password_verify( (string) ( $_POST['password'] ?? '' ), WPC_ERS_PASSWORD_HASH ) ) {
+		$ip = wpc_client_ip();
+		wpc_rate(
+			function ( $d ) use ( $ip ) {
+				unset( $d[ $ip ] );
+				return $d;
+			}
+		);
+		wpc_start_session();
+		wpc_redirect();
+	} else {
+		$ip = wpc_client_ip();
+		wpc_rate(
+			function ( $d ) use ( $ip ) {
+				$d[ $ip ][] = time();
+				return $d;
+			}
+		);
+		usleep( 400000 );
+		http_response_code( 401 );
+		$error = 'Incorrect password.';
+	}
+}
+
+if ( ! $session ) {
+	if ( 'POST' === $method && 'login' !== $action ) {
+		http_response_code( 403 );
+	}
+	$locked = wpc_locked_for();
+	if ( $locked && '' === $error ) {
+		http_response_code( 429 );
+		$error = "Too many failed attempts. Try again in {$locked} minute(s).";
+	}
+	wpc_render_login( $error );
+	exit;
+}
+
+// Sliding expiry, same session ID (so CSRF tokens on open pages stay valid).
+wpc_start_session( $session['sid'] );
+$csrf = wpc_csrf( $session['sid'] );
+
+// --- Authenticated actions (POST + CSRF) ----------------------------------------
+$db = new Wpc_Ers_Db( $defines );
+
+if ( 'POST' === $method ) {
+	if ( ! hash_equals( $csrf, (string) ( $_POST['csrf'] ?? '' ) ) ) {
+		http_response_code( 403 );
+		exit( 'Invalid or missing CSRF token.' );
+	}
+
+	if ( 'logout' === $action ) {
+		wpc_cookie( 'wpc_ers', '', 0 );
+		header( 'Location: ' . wpc_self_url(), true, 303 );
+		exit;
+	}
+	if ( 'self_destruct' === $action ) {
+		@unlink( wpc_rate_file() );
+		wpc_cookie( 'wpc_ers', '', 0 );
+		$gone = @unlink( __FILE__ );
+		exit( $gone ? 'The Emergency Recovery Script has been deleted.' : 'Could not delete this file; remove it manually.' );
+	}
+	if ( ! $db->ok() ) {
+		wpc_redirect( 'Database connection failed: ' . $db->error, 'err' );
+	}
+
+	$options = $prefix . 'options';
+	switch ( $action ) {
+		case 'plugin_toggle':
+			$file   = (string) ( $_POST['plugin'] ?? '' );
+			$active = (array) wpc_unserialize( wpc_get_option( $db, $prefix, 'active_plugins' ) );
+			if ( in_array( $file, $active, true ) ) {
+				$active = array_values( array_diff( $active, array( $file ) ) );
+				$msg    = "Deactivated {$file}.";
+			} elseif ( isset( wpc_plugins( $content_dir )[ $file ] ) ) {
+				$active[] = $file;
+				sort( $active );
+				$msg = "Activated {$file}.";
+			} else {
+				wpc_redirect( 'Unknown plugin.', 'err' );
+			}
+			wpc_set_option( $db, $prefix, 'active_plugins', serialize( $active ) );
+			wpc_redirect( $msg );
+			break;
+
+		case 'plugins_off':
+			wpc_set_option( $db, $prefix, 'active_plugins', serialize( array() ) );
+			wpc_redirect( 'All plugins deactivated.' );
+			break;
+
+		case 'theme_switch':
+			$slug   = (string) ( $_POST['theme'] ?? '' );
+			$themes = wpc_themes( $content_dir );
+			if ( ! isset( $themes[ $slug ] ) ) {
+				wpc_redirect( 'Unknown theme.', 'err' );
+			}
+			$parent = '' !== $themes[ $slug ]['template'] ? $themes[ $slug ]['template'] : $slug;
+			wpc_set_option( $db, $prefix, 'template', $parent );
+			wpc_set_option( $db, $prefix, 'stylesheet', $slug );
+			wpc_set_option( $db, $prefix, 'current_theme', $themes[ $slug ]['name'] );
+			wpc_redirect( "Switched theme to {$themes[ $slug ]['name']}." );
+			break;
+
+		case 'snapshot_restore':
+			$snapshots = wpc_snapshots( $db, $prefix, ! empty( $defines['MULTISITE'] ) );
+			$id        = (int) ( $_POST['snapshot'] ?? 0 );
+			if ( 'RESTORE' !== (string) ( $_POST['confirm'] ?? '' ) ) {
+				wpc_redirect( 'Type RESTORE to confirm the restore.', 'err' );
+			}
+			if ( ! isset( $snapshots[ $id ] ) ) {
+				wpc_redirect( 'Snapshot not found.', 'err' );
+			}
+			list( $ok, $msg ) = wpc_restore( $db, $snapshots[ $id ], wpc_network_skip( $defines, $prefix ) );
+			wpc_redirect( $msg, $ok ? 'ok' : 'err' );
+			break;
+
+		case 'undo_update':
+			// Files + database: stage the archived plugin / theme folders, swap the
+			// tables, and only then swap the folders in. A failed table swap
+			// discards the staged files, so code and data always match.
+			$snapshots = wpc_snapshots( $db, $prefix, ! empty( $defines['MULTISITE'] ) );
+			$id        = (int) ( $_POST['snapshot'] ?? 0 );
+			if ( 'RESTORE' !== (string) ( $_POST['confirm'] ?? '' ) ) {
+				wpc_redirect( 'Type RESTORE to confirm the undo.', 'err' );
+			}
+			if ( ! isset( $snapshots[ $id ] ) || empty( $snapshots[ $id ]['files'] ) ) {
+				wpc_redirect( 'That snapshot has no plugin or theme files to revert.', 'err' );
+			}
+			$dir = wpc_rollback_dir( $db, $prefix, $content_dir );
+			if ( '' === $dir ) {
+				wpc_redirect( 'WP Chrono\'s storage folder is not recorded in the database, so the archived files cannot be found.', 'err' );
+			}
+			$job = substr( bin2hex( random_bytes( 4 ) ), 0, 6 );
+			list( $ok, $staged ) = wpc_stage_files( $snapshots[ $id ]['files'], $dir, $content_dir, $job );
+			if ( ! $ok ) {
+				wpc_redirect( $staged, 'err' );
+			}
+			list( $ok, $msg ) = wpc_restore( $db, $snapshots[ $id ], wpc_network_skip( $defines, $prefix ) );
+			if ( ! $ok ) {
+				foreach ( $staged as $item ) {
+					wpc_rmtree( $item['new'] );
+				}
+				wpc_redirect( $msg . ' Plugin and theme files were left unchanged.', 'err' );
+			}
+			$reverted = wpc_commit_files( $staged );
+			wpc_redirect( sprintf( 'Undid the update: reverted %d of %d plugin/theme folder(s) (%s). %s', count( $reverted ), count( $staged ), implode( ', ', $reverted ), $msg ), count( $reverted ) === count( $staged ) ? 'ok' : 'err' );
+			break;
+
+		case 'admin_create':
+			$login = preg_replace( '/[^A-Za-z0-9_.@-]/', '', (string) ( $_POST['login'] ?? '' ) );
+			$email = filter_var( (string) ( $_POST['email'] ?? '' ), FILTER_VALIDATE_EMAIL );
+			$pass  = (string) ( $_POST['password'] ?? '' );
+			if ( '' === $login || ! $email || strlen( $pass ) < 12 ) {
+				wpc_redirect( 'Provide a username, a valid email and a password of at least 12 characters.', 'err' );
+			}
+			$users = Wpc_Ers_Db::id( $prefix . 'users' );
+			if ( $db->val( "SELECT ID FROM {$users} WHERE user_login = " . $db->q( $login ) . ' OR user_email = ' . $db->q( $email ) ) ) {
+				wpc_redirect( 'That username or email is already in use.', 'err' );
+			}
+			// bcrypt is accepted by wp_check_password() in every supported WordPress version.
+			$ok = $db->exec(
+				"INSERT INTO {$users} (user_login, user_pass, user_nicename, user_email, user_registered, display_name, user_status) VALUES (" .
+				implode( ',', array( $db->q( $login ), $db->q( password_hash( $pass, PASSWORD_BCRYPT ) ), $db->q( strtolower( $login ) ), $db->q( $email ), $db->q( gmdate( 'Y-m-d H:i:s' ) ), $db->q( $login ), '0' ) ) . ')'
+			);
+			$uid = $db->insert_id();
+			if ( ! $ok || ! $uid ) {
+				wpc_redirect( 'Could not create the user: ' . $db->error, 'err' );
+			}
+			$meta = Wpc_Ers_Db::id( $prefix . 'usermeta' );
+			$db->exec( "INSERT INTO {$meta} (user_id, meta_key, meta_value) VALUES ({$uid}, " . $db->q( $prefix . 'capabilities' ) . ', ' . $db->q( serialize( array( 'administrator' => true ) ) ) . "), ({$uid}, " . $db->q( $prefix . 'user_level' ) . ", '10')" );
+			wpc_redirect( "Administrator {$login} created. Log in to wp-admin, then remove or demote this account when you are done." );
+			break;
+
+		case 'urls_fix':
+			foreach ( array( 'siteurl', 'home' ) as $key ) {
+				$url = filter_var( rtrim( (string) ( $_POST[ $key ] ?? '' ), '/' ), FILTER_VALIDATE_URL );
+				if ( ! $url || ! preg_match( '#^https?://#i', $url ) ) {
+					wpc_redirect( "Invalid {$key}.", 'err' );
+				}
+				wpc_set_option( $db, $prefix, $key, $url );
+			}
+			wpc_redirect( 'Site URLs updated.' );
+			break;
+	}
+	wpc_redirect( 'Unknown action.', 'err' );
+}
+
+wpc_render_console( $db, $prefix, $content_dir, $defines, $config_file, $csrf );
+exit;
+
+// ===========================================================================
+// Views
+// ===========================================================================
+
+function wpc_styles() {
+	return <<<'CSS'
+:root{--bg:#fafafa;--card:#fff;--fg:#09090b;--muted:#71717a;--border:#e4e4e7;--accent:#f4f4f5;--primary:#18181b;--on-primary:#fafafa;--danger:#dc2626;--ok:#059669;--warn:#d97706;--code:#f4f4f5}
+@media (prefers-color-scheme:dark){:root{--bg:#09090b;--card:#0c0c0e;--fg:#fafafa;--muted:#a1a1aa;--border:#27272a;--accent:#18181b;--primary:#fafafa;--on-primary:#18181b;--danger:#ef4444;--ok:#34d399;--warn:#fbbf24;--code:#18181b}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1100px;margin:0 auto;padding:24px 16px 64px}header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin-bottom:24px}
+.brand{display:flex;gap:10px;align-items:center;font-weight:600;font-size:16px}.logo{width:28px;height:28px;border-radius:7px;background:var(--primary);color:var(--on-primary);display:grid;place-items:center;font-size:14px}
+.muted{color:var(--muted)}.small{font-size:12px}.grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px}.card h2{margin:0 0 4px;font-size:15px}.card>p{margin:0 0 14px}
+.full{grid-column:1/-1}table{width:100%;border-collapse:collapse}td,th{padding:8px 6px;border-top:1px solid var(--border);text-align:left;vertical-align:middle}th{font-size:12px;color:var(--muted);font-weight:500;border-top:0}
+button,.btn{font:inherit;cursor:pointer;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--fg);padding:6px 12px;font-weight:500}button:hover{background:var(--accent)}
+.primary{background:var(--primary);color:var(--on-primary);border-color:var(--primary)}.primary:hover{opacity:.9;background:var(--primary)}.danger{background:var(--danger);border-color:var(--danger);color:#fff}.danger:hover{opacity:.9;background:var(--danger)}
+input{font:inherit;color:var(--fg);background:transparent;border:1px solid var(--border);border-radius:8px;padding:7px 10px;width:100%}form.row{display:flex;gap:8px;align-items:center;margin:0}form.stack{display:grid;gap:8px}
+.badge{display:inline-block;font-size:11px;font-weight:600;border-radius:6px;padding:2px 7px;background:var(--accent);color:var(--muted)}.badge.on{background:rgba(5,150,105,.12);color:var(--ok)}.badge.warn{background:rgba(217,119,6,.12);color:var(--warn)}.badge.err{background:rgba(220,38,38,.12);color:var(--danger)}
+pre.log{margin:0;max-height:340px;overflow:auto;background:#09090b;color:#d4d4d8;border-radius:8px;padding:12px;font:11px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all}pre.log .fatal{color:#f87171;font-weight:600}
+.notice{border-radius:10px;padding:12px 14px;margin-bottom:16px;border:1px solid var(--border)}.notice.ok{border-color:rgba(5,150,105,.4);background:rgba(5,150,105,.08)}.notice.err{border-color:rgba(220,38,38,.4);background:rgba(220,38,38,.08)}
+.culprit{border:1px solid rgba(220,38,38,.4);background:rgba(220,38,38,.06);border-radius:10px;padding:12px;margin-bottom:12px}code{font:12px ui-monospace,Menlo,Consolas,monospace;background:var(--code);padding:1px 5px;border-radius:5px}
+.login{max-width:380px;margin:12vh auto;padding:0 16px}.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 16px;font-size:13px}
+CSS;
+}
+
+function wpc_page( $title, $body ) {
+	echo '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">';
+	echo '<title>' . wpc_e( $title ) . '</title><style>' . wpc_styles() . '</style></head><body>' . $body . '</body></html>';
+}
+
+function wpc_render_login( $error ) {
+	$token = wpc_login_token();
+	ob_start();
+	?>
+	<div class="login">
+		<div class="brand" style="margin-bottom:20px"><span class="logo">⟲</span> WP Chrono · Emergency Recovery</div>
+		<div class="card">
+			<h2>Sign in</h2>
+			<p class="muted small">This console works without WordPress. Use the recovery password shown when the script was generated.</p>
+			<?php if ( $error ) : ?>
+				<div class="notice err"><?php echo wpc_e( $error ); ?></div>
+			<?php endif; ?>
+			<form method="post" class="stack" autocomplete="off">
+				<input type="hidden" name="action" value="login">
+				<input type="hidden" name="csrf" value="<?php echo wpc_e( $token ); ?>">
+				<input type="password" name="password" placeholder="Recovery password" autofocus required>
+				<button class="primary" type="submit">Unlock recovery console</button>
+			</form>
+		</div>
+		<p class="muted small" style="text-align:center">5 failed attempts lock this console for 15 minutes.</p>
+	</div>
+	<?php
+	wpc_page( 'Emergency Recovery · Sign in', (string) ob_get_clean() );
+}
+
+function wpc_render_console( Wpc_Ers_Db $db, $prefix, $content_dir, array $defines, $config_file, $csrf ) {
+	$hidden    = '<input type="hidden" name="csrf" value="' . wpc_e( $csrf ) . '">';
+	// Multisite: network users & blogs are kept unless explicitly included.
+	$network_box = empty( $defines['MULTISITE'] ) ? '' : '<label class="small muted" title="Also restore users, usermeta, blogs, site, sitemeta, blogmeta, signups"><input type="checkbox" name="include_network" value="1"> Include network users &amp; blogs</label>';
+	$notice    = (string) ( $_GET['notice'] ?? '' );
+	$tone      = 'err' === ( $_GET['tone'] ?? '' ) ? 'err' : 'ok';
+	$log_file  = wpc_debug_log_path( $defines, $content_dir );
+	$lines     = wpc_tail( $log_file, 100 );
+	$culprit   = wpc_culprit( $lines );
+	$last      = error_get_last();
+	$connected = $db->ok();
+	$plugins   = wpc_plugins( $content_dir );
+	$themes    = wpc_themes( $content_dir );
+	$active    = $connected ? (array) wpc_unserialize( wpc_get_option( $db, $prefix, 'active_plugins' ) ) : array();
+	$template  = $connected ? (string) wpc_get_option( $db, $prefix, 'template' ) : '';
+	$style     = $connected ? (string) wpc_get_option( $db, $prefix, 'stylesheet' ) : '';
+	$siteurl   = $connected ? (string) wpc_get_option( $db, $prefix, 'siteurl' ) : '';
+	$home      = $connected ? (string) wpc_get_option( $db, $prefix, 'home' ) : '';
+	$snapshots = $connected ? wpc_snapshots( $db, $prefix, ! empty( $defines['MULTISITE'] ) ) : array();
+	$update    = wpc_last_update( $snapshots );
+	$wp_ver    = preg_match( "/\\\$wp_version\s*=\s*'([^']+)'/", (string) @file_get_contents( __DIR__ . '/wp-includes/version.php' ), $m ) ? $m[1] : '?';
+
+	ob_start();
+	?>
+	<div class="wrap">
+		<header>
+			<div class="brand"><span class="logo">⟲</span> WP Chrono · Emergency Recovery</div>
+			<div style="display:flex;gap:8px">
+				<form method="post" class="row"><?php echo $hidden; ?><input type="hidden" name="action" value="logout"><button>Log out</button></form>
+				<form method="post" class="row"><?php echo $hidden; ?><input type="hidden" name="action" value="self_destruct"><button class="danger" title="Delete this file from the server">Delete this script</button></form>
+			</div>
+		</header>
+
+		<?php if ( '' !== $notice ) : ?>
+			<div class="notice <?php echo $tone; ?>"><?php echo wpc_e( $notice ); ?></div>
+		<?php endif; ?>
+
+		<div class="grid">
+			<section class="card">
+				<h2>System</h2>
+				<p class="muted small">Generated <?php echo wpc_e( WPC_ERS_GENERATED_AT ); ?>. WordPress is not loaded by this page.</p>
+				<div class="kv">
+					<span class="muted">Database</span><span><?php echo $connected ? '<span class="badge on">connected</span> ' . wpc_e( $db->driver . ' · ' . $db->server() ) : '<span class="badge err">failed</span> ' . wpc_e( $db->error ); ?></span>
+					<span class="muted">wp-config.php</span><span><code><?php echo wpc_e( $config_file ?: 'not found' ); ?></code></span>
+					<span class="muted">Table prefix</span><span><code><?php echo wpc_e( $prefix ); ?></code></span>
+					<span class="muted">WordPress</span><span><?php echo wpc_e( $wp_ver ); ?></span>
+					<span class="muted">PHP</span><span><?php echo wpc_e( PHP_VERSION ); ?></span>
+					<span class="muted">Site URL</span><span><?php echo wpc_e( $siteurl ?: '?' ); ?></span>
+				</div>
+			</section>
+
+			<section class="card">
+				<h2>Repair site URLs</h2>
+				<p class="muted small">Fixes a site that redirects to the wrong domain after a migration.</p>
+				<form method="post" class="stack">
+					<?php echo $hidden; ?><input type="hidden" name="action" value="urls_fix">
+					<label class="small muted">WordPress address (siteurl)<input name="siteurl" value="<?php echo wpc_e( $siteurl ); ?>"></label>
+					<label class="small muted">Site address (home)<input name="home" value="<?php echo wpc_e( $home ); ?>"></label>
+					<button class="primary" <?php echo $connected ? '' : 'disabled'; ?>>Save URLs</button>
+				</form>
+			</section>
+
+			<?php if ( $update ) : ?>
+				<section class="card full" id="undo-update">
+					<h2>Undo last update (files + database)</h2>
+					<p class="muted small">Snapshot <code>#<?php echo (int) $update['id']; ?></code> (<?php echo wpc_e( $update['label'] ); ?>, <?php echo wpc_e( $update['created'] ); ?>) was taken right before this update and holds the previous plugin / theme files. Undoing puts back both the old files and the old database, so they match again.</p>
+					<table>
+						<tr><th>Type</th><th>Folder</th><th>Installed now</th><th>Reverts to</th></tr>
+						<?php foreach ( $update['files'] as $f ) : ?>
+							<tr>
+								<td><?php echo wpc_e( $f['type'] ); ?></td>
+								<td><code><?php echo wpc_e( $f['slug'] ); ?></code><?php echo $culprit && $culprit['slug'] === basename( (string) $f['slug'] ) ? ' <span class="badge err">crashing</span>' : ''; ?></td>
+								<td class="muted"><?php echo wpc_e( (string) ( $f['new_version'] ?? '?' ) ); ?></td>
+								<td><?php echo wpc_e( (string) ( $f['old_version'] ?? '?' ) ); ?></td>
+							</tr>
+						<?php endforeach; ?>
+					</table>
+					<form method="post" class="row" style="margin-top:12px">
+						<?php echo $hidden; ?><input type="hidden" name="action" value="undo_update"><input type="hidden" name="snapshot" value="<?php echo (int) $update['id']; ?>">
+						<?php echo $network_box; ?><input name="confirm" placeholder="RESTORE" style="width:110px" required pattern="RESTORE">
+						<button class="danger" <?php echo $connected ? '' : 'disabled'; ?>>Undo Last Update (Files + DB)</button>
+					</form>
+				</section>
+			<?php endif; ?>
+
+			<section class="card full">
+				<h2>Crash diagnostics</h2>
+				<p class="muted small">Last 100 lines of <code><?php echo wpc_e( $log_file ); ?></code><?php echo empty( $defines['WP_DEBUG_LOG'] ) ? ' — WP_DEBUG_LOG is not enabled in wp-config.php, so new errors may not be recorded.' : ''; ?></p>
+				<?php if ( $culprit ) : ?>
+					<div class="culprit">
+						<strong>Latest fatal error</strong>
+						<?php if ( '' !== $culprit['slug'] ) : ?>
+							— likely culprit: <?php echo wpc_e( $culprit['type'] ); ?> <code><?php echo wpc_e( $culprit['slug'] ); ?></code>
+						<?php endif; ?>
+						<div class="small muted" style="margin-top:6px;word-break:break-all"><?php echo wpc_e( $culprit['line'] ); ?></div>
+						<?php
+						if ( 'plugin' === $culprit['type'] ) {
+							foreach ( $active as $file ) {
+								if ( 0 === strpos( $file, $culprit['slug'] . '/' ) || $file === $culprit['slug'] ) {
+									echo '<form method="post" class="row" style="margin-top:10px">' . $hidden . '<input type="hidden" name="action" value="plugin_toggle"><input type="hidden" name="plugin" value="' . wpc_e( $file ) . '"><button class="danger">Deactivate ' . wpc_e( $file ) . '</button></form>';
+								}
+							}
+						}
+						?>
+					</div>
+				<?php endif; ?>
+				<?php if ( $last ) : ?>
+					<p class="small"><strong>error_get_last():</strong> <?php echo wpc_e( $last['message'] . ' in ' . $last['file'] . ':' . $last['line'] ); ?></p>
+				<?php endif; ?>
+				<pre class="log"><?php
+				if ( ! $lines ) {
+					echo 'No log entries found.';
+				}
+				foreach ( $lines as $line ) {
+					$fatal = preg_match( '/PHP (Fatal|Parse) error|Uncaught/', $line );
+					echo ( $fatal ? '<span class="fatal">' : '' ) . wpc_e( $line ) . ( $fatal ? '</span>' : '' ) . "\n";
+				}
+				?></pre>
+			</section>
+
+			<section class="card full">
+				<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:start">
+					<div><h2>Plugins</h2><p class="muted small">Edits <code>active_plugins</code> directly. Plugin code is never loaded here.</p></div>
+					<form method="post" class="row"><?php echo $hidden; ?><input type="hidden" name="action" value="plugins_off"><button class="danger" <?php echo $connected ? '' : 'disabled'; ?>>Deactivate all plugins</button></form>
+				</div>
+				<table>
+					<tr><th>Plugin</th><th>File</th><th>Version</th><th>Status</th><th></th></tr>
+					<?php foreach ( $plugins as $file => $p ) : $on = in_array( $file, $active, true ); ?>
+						<tr>
+							<td><?php echo wpc_e( $p['name'] ); ?><?php echo $culprit && $culprit['slug'] && 0 === strpos( $file, $culprit['slug'] ) ? ' <span class="badge err">crashing</span>' : ''; ?></td>
+							<td><code><?php echo wpc_e( $file ); ?></code></td>
+							<td class="muted"><?php echo wpc_e( $p['version'] ); ?></td>
+							<td><span class="badge <?php echo $on ? 'on' : ''; ?>"><?php echo $on ? 'active' : 'inactive'; ?></span></td>
+							<td style="text-align:right"><form method="post" class="row" style="justify-content:flex-end"><?php echo $hidden; ?><input type="hidden" name="action" value="plugin_toggle"><input type="hidden" name="plugin" value="<?php echo wpc_e( $file ); ?>"><button <?php echo $connected ? '' : 'disabled'; ?>><?php echo $on ? 'Deactivate' : 'Activate'; ?></button></form></td>
+						</tr>
+					<?php endforeach; ?>
+				</table>
+			</section>
+
+			<section class="card">
+				<h2>Themes</h2>
+				<p class="muted small">Switch to a default theme if the active one fatals.</p>
+				<table>
+					<?php foreach ( $themes as $slug => $t ) : $on = $slug === $style; ?>
+						<tr>
+							<td><?php echo wpc_e( $t['name'] ); ?> <?php echo 0 === strpos( $slug, 'twenty' ) ? '<span class="badge">default</span>' : ''; ?></td>
+							<td><?php echo $on ? '<span class="badge on">active</span>' : ''; ?><?php echo $slug === $template && ! $on ? '<span class="badge">parent</span>' : ''; ?></td>
+							<td style="text-align:right"><?php if ( ! $on ) : ?><form method="post" class="row" style="justify-content:flex-end"><?php echo $hidden; ?><input type="hidden" name="action" value="theme_switch"><input type="hidden" name="theme" value="<?php echo wpc_e( $slug ); ?>"><button <?php echo $connected ? '' : 'disabled'; ?>>Activate</button></form><?php endif; ?></td>
+						</tr>
+					<?php endforeach; ?>
+				</table>
+			</section>
+
+			<section class="card">
+				<h2>Emergency administrator</h2>
+				<p class="muted small">Creates an admin account directly in the database.</p>
+				<form method="post" class="stack" autocomplete="off">
+					<?php echo $hidden; ?><input type="hidden" name="action" value="admin_create">
+					<input name="login" placeholder="Username" required>
+					<input name="email" type="email" placeholder="Email" required>
+					<input name="password" type="password" placeholder="Password (12+ characters)" minlength="12" required>
+					<button class="primary" <?php echo $connected ? '' : 'disabled'; ?>>Create administrator</button>
+				</form>
+			</section>
+
+			<section class="card full">
+				<h2>Snapshots</h2>
+				<p class="muted small">Atomic rollback: tables are staged, then swapped in with one <code>RENAME TABLE</code>. Snapshots are read from the tracking table, or rebuilt from table comments if it is damaged.</p>
+				<?php if ( ! $snapshots ) : ?>
+					<p class="muted">No snapshots found.</p>
+				<?php else : ?>
+					<table>
+						<tr><th>#</th><th>Label</th><th>Created</th><th>Tables</th><th>Source</th><th></th></tr>
+						<?php foreach ( $snapshots as $s ) : ?>
+							<tr>
+								<td><code>#<?php echo (int) $s['id']; ?></code></td>
+								<td><?php echo wpc_e( $s['label'] ); ?> <span class="badge"><?php echo wpc_e( $s['trigger'] ); ?></span></td>
+								<td class="muted small"><?php echo wpc_e( $s['created'] ); ?></td>
+								<td><?php echo count( $s['tables'] ); ?></td>
+								<td><span class="badge <?php echo 'table comments' === $s['source'] ? 'warn' : ''; ?>"><?php echo wpc_e( $s['source'] ); ?></span></td>
+								<td style="text-align:right">
+									<form method="post" class="row" style="justify-content:flex-end">
+										<?php echo $hidden; ?><input type="hidden" name="action" value="snapshot_restore"><input type="hidden" name="snapshot" value="<?php echo (int) $s['id']; ?>">
+										<?php echo $network_box; ?><input name="confirm" placeholder="RESTORE" style="width:110px" required pattern="RESTORE">
+										<button class="danger">Restore</button>
+									</form>
+								</td>
+							</tr>
+						<?php endforeach; ?>
+					</table>
+				<?php endif; ?>
+			</section>
+		</div>
+		<p class="muted small" style="margin-top:24px">If the site uses a persistent object cache (Redis, Memcached), flush it after making changes here.</p>
+	</div>
+	<?php
+	wpc_page( 'Emergency Recovery · WP Chrono', (string) ob_get_clean() );
+}
