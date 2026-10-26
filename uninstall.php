@@ -38,3 +38,6 @@ if ( is_array( $wpchrono_recovery ) && preg_match( '/^wp-chrono-recovery-[a-z0-9
 }
 
 $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s", $wpdb->esc_like( 'wp_chrono_' ) . '%' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+
+wp_unschedule_hook( 'wp_chrono_scheduled_snapshot' );
+wp_unschedule_hook( 'wp_chrono_scheduled_snapshot_continue' );

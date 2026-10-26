@@ -14,6 +14,7 @@ namespace WPChrono\Core;
 use WPChrono\API\Router;
 use WPChrono\CLI\Commands;
 use WPChrono\Services\SafeUpdates;
+use WPChrono\Services\Scheduler;
 use WPChrono\Services\SnapshotService;
 use WPChrono\Services\Updater;
 
@@ -59,6 +60,7 @@ final class Plugin {
 			add_action( '_core_updated_successfully', array( SnapshotService::class, 'after_core_update' ), 1 );
 			Updater::register();
 			SafeUpdates::register();
+			Scheduler::register();
 		}
 
 		if ( $cli ) {

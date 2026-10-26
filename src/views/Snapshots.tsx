@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   AlertTriangle,
   BadgeCheck,
+  CalendarClock,
   Camera,
   CloudDownload,
   CloudUpload,
@@ -49,6 +50,7 @@ import type { ChronoSettings, CloudTick, ExportTick, SafeUpdateCheck, Snapshot, 
 const TRIGGERS: Record<Snapshot['trigger_type'], { label: string; icon: typeof Hand; className: string }> = {
   manual: { label: 'Manual', icon: Hand, className: 'bg-secondary text-secondary-foreground' },
   auto: { label: 'Auto-Update', icon: Sparkles, className: 'bg-sky-500/10 text-sky-700 dark:text-sky-400' },
+  scheduled: { label: 'Scheduled', icon: CalendarClock, className: 'bg-teal-500/10 text-teal-700 dark:text-teal-400' },
   safety: { label: 'Pre-Reset Safety', icon: ShieldCheck, className: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400' },
   cloud: { label: 'From Cloud', icon: CloudDownload, className: 'bg-violet-500/10 text-violet-700 dark:text-violet-400' },
   import: { label: 'Imported', icon: FileUp, className: 'bg-amber-500/10 text-amber-700 dark:text-amber-400' },

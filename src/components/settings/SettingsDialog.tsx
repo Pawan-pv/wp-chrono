@@ -160,6 +160,55 @@ export function SettingsDialog({ open, onOpenChange, tab, onTabChange }: Setting
               </span>
               <Input type="number" min={1} max={10240} className="w-24" value={settings?.rollback_max_mb ?? ''} onChange={(e) => num('rollback_max_mb', e.target.value)} aria-label="Rollback archive size limit (MB)" />
             </label>
+            <div className="flex flex-col gap-2 rounded-lg border p-3" data-e2e="schedule-settings">
+              <span className="flex flex-col">
+                <span className="text-sm font-medium">Scheduled snapshots</span>
+                <span className="text-xs text-muted-foreground">
+                  {settings?.schedule !== 'off' && settings?.schedule_next
+                    ? `Next: ${new Date(settings.schedule_next).toLocaleString()}`
+                    : 'A database snapshot on a fixed schedule, kept separately from the update snapshots.'}
+                </span>
+              </span>
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <select
+                  value={settings?.schedule ?? 'off'}
+                  disabled={!settings}
+                  onChange={(e) => setSettings((s) => (s ? { ...s, schedule: e.target.value as ChronoSettings['schedule'] } : s))}
+                  className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+                  aria-label="Schedule"
+                >
+                  <option value="off">Off</option>
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly (Sundays)</option>
+                </select>
+                at
+                <select
+                  value={settings?.schedule_hour ?? 3}
+                  disabled={!settings || settings.schedule === 'off'}
+                  onChange={(e) => setSettings((s) => (s ? { ...s, schedule_hour: Number(e.target.value) } : s))}
+                  className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+                  aria-label="Hour"
+                >
+                  {Array.from({ length: 24 }, (_, h) => (
+                    <option key={h} value={h}>
+                      {String(h).padStart(2, '0')}:00
+                    </option>
+                  ))}
+                </select>
+                keep
+                <Input
+                  type="number"
+                  min={1}
+                  max={50}
+                  className="w-16"
+                  value={settings?.schedule_keep ?? ''}
+                  disabled={!settings || settings.schedule === 'off'}
+                  onChange={(e) => num('schedule_keep', e.target.value)}
+                  aria-label="Scheduled snapshots to keep"
+                />
+              </div>
+              <span className="text-xs text-muted-foreground">Site time zone. Runs through WP-Cron, so it starts with the first visit after that hour.</span>
+            </div>
             <div className="flex justify-end">
               <Button type="submit" size="sm" disabled={!settings || busy === 'settings'}>
                 {busy === 'settings' ? <Loader2 className="animate-spin" /> : <Save />}

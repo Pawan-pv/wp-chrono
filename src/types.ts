@@ -95,7 +95,7 @@ export interface FullResetResponse {
   redirect: string;
 }
 
-export type SnapshotTrigger = 'manual' | 'auto' | 'safety' | 'cloud' | 'import';
+export type SnapshotTrigger = 'manual' | 'auto' | 'scheduled' | 'safety' | 'cloud' | 'import';
 
 /** A plugin or theme pinned by a blueprint (Services/BlueprintService.php). */
 export interface BlueprintItem {
@@ -241,6 +241,12 @@ export interface ChronoSettings {
   auto_retention: number;
   storage_warn_mb: number;
   rollback_max_mb: number;
+  schedule: 'off' | 'daily' | 'weekly';
+  /** 0–23, in the site's timezone. */
+  schedule_hour: number;
+  schedule_keep: number;
+  /** Next scheduled snapshot (ISO, UTC); read-only. */
+  schedule_next?: string | null;
 }
 
 /** GET /license (Services/LicenseService.php). */

@@ -42,5 +42,6 @@ if ( is_readable( WP_CHRONO_DIR . 'vendor/autoload.php' ) ) {
 }
 
 register_activation_hook( __FILE__, array( \WPChrono\Core\Installer::class, 'activate' ) );
+register_deactivation_hook( __FILE__, array( \WPChrono\Services\Scheduler::class, 'deactivate' ) );
 
 add_action( 'plugins_loaded', array( \WPChrono\Core\Plugin::class, 'boot' ) );

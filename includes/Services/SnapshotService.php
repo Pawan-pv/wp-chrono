@@ -27,7 +27,7 @@ final class SnapshotService {
 
 	const TICK_BUDGET = 5.0;
 
-	const TRIGGERS = array( 'manual', 'auto', 'safety', 'cloud', 'import' );
+	const TRIGGERS = array( 'manual', 'auto', 'scheduled', 'safety', 'cloud', 'import' );
 
 	const AUTO_LOCK = '_wpchrono_auto_snap_lock';
 
@@ -784,12 +784,21 @@ final class SnapshotService {
 	 * @return int[] IDs deleted.
 	 */
 	public function prune_auto( ?int $keep = null ): array {
-		$keep  = max( 1, null === $keep ? (int) Settings::get()['auto_retention'] : $keep );
+		return $this->prune_trigger( 'auto', null === $keep ? (int) Settings::get()['auto_retention'] : $keep );
+	}
+
+	/**
+	 * Keeps only the newest $keep ready snapshots of one trigger type.
+	 *
+	 * @return int[] IDs deleted.
+	 */
+	public function prune_trigger( string $trigger, int $keep ): array {
+		$keep  = max( 1, $keep );
 		$autos = array_values(
 			array_filter(
 				$this->all(),
-				static function ( $s ) {
-					return 'auto' === $s['trigger_type'] && 'ready' === $s['status'];
+				static function ( $s ) use ( $trigger ) {
+					return $trigger === $s['trigger_type'] && 'ready' === $s['status'];
 				}
 			)
 		);

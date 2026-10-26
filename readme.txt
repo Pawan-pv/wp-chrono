@@ -34,6 +34,7 @@ WP Chrono is a time machine for your WordPress database and the plugins you upda
 * Chunked snapshot creation that survives shared-hosting time limits (tested with 240,000+ rows).
 * **Atomic restore**: tables are staged, then swapped in with a single `RENAME TABLE`. Your site is never half-restored, and you stay logged in.
 * Every snapshot is **verified** (row and column counts) the moment it finishes.
+* **Scheduled snapshots**: daily or weekly at the hour you pick, kept separately from the update snapshots.
 * Visual diff of tables and `wp_options` against the live site.
 * Export to `.sql.gz` and **import it back** — even onto a freshly reset site. No phpMyAdmin, no paywall.
 * Foreign keys are captured and re-created; multisite main-site restores never touch subsite tables or network users.
@@ -134,6 +135,7 @@ Settings & License (the gear icon) → License, paste the key and click Activate
 == Changelog ==
 
 = 1.0.2 =
+* New: **scheduled snapshots** — daily, or weekly on Sundays, at an hour you choose (site time zone), with their own retention. Built in small steps through WP-Cron, so they finish on hosts with short time limits.
 * New: WordPress core updates are snapshotted and archived (wp-admin, wp-includes, root files) and can be undone with Full Undo or from the Emergency Recovery Script. Safe Updates checks core updates too and undoes one that breaks the site.
 * Fix: restoring a snapshot taken during an update brought back WordPress's update lock, blocking updates for 15 minutes.
 

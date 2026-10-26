@@ -30,6 +30,7 @@ use WP_REST_Request;
 use WP_REST_Server;
 use WPChrono\Services\CloudStorageService;
 use WPChrono\Services\DiffService;
+use WPChrono\Services\Scheduler;
 use WPChrono\Services\Settings;
 use WPChrono\Services\SiteInspector;
 use WPChrono\Services\Snapshot\LocalImport;
@@ -236,6 +237,9 @@ final class SnapshotController extends RestController {
 						'auto_retention'  => array( 'type' => 'integer', 'minimum' => 1, 'maximum' => 50 ),
 						'storage_warn_mb' => array( 'type' => 'integer', 'minimum' => 1, 'maximum' => 1048576 ),
 						'rollback_max_mb' => array( 'type' => 'integer', 'minimum' => 1, 'maximum' => 10240 ),
+						'schedule'        => array( 'type' => 'string', 'enum' => Settings::SCHEDULES ),
+						'schedule_hour'   => array( 'type' => 'integer', 'minimum' => 0, 'maximum' => 23 ),
+						'schedule_keep'   => array( 'type' => 'integer', 'minimum' => 1, 'maximum' => 50 ),
 					),
 				),
 			)
@@ -381,12 +385,12 @@ final class SnapshotController extends RestController {
 	}
 
 	public function settings(): \WP_REST_Response {
-		return $this->ok( Settings::get() );
+		return $this->ok( Settings::get() + array( 'schedule_next' => Scheduler::next() ) );
 	}
 
 	public function update_settings( WP_REST_Request $request ): \WP_REST_Response {
 		$changes = array();
-		foreach ( array( 'auto_snapshot', 'safe_updates', 'auto_retention', 'storage_warn_mb', 'rollback_max_mb' ) as $key ) {
+		foreach ( array_keys( Settings::DEFAULTS ) as $key ) {
 			if ( null !== $request[ $key ] ) {
 				$changes[ $key ] = $request[ $key ];
 			}
@@ -395,7 +399,10 @@ final class SnapshotController extends RestController {
 		if ( isset( $changes['auto_retention'] ) ) {
 			$this->service->prune_auto();
 		}
-		return $this->ok( $settings );
+		if ( isset( $changes['schedule_keep'] ) ) {
+			$this->service->prune_trigger( 'scheduled', $settings['schedule_keep'] );
+		}
+		return $this->ok( $settings + array( 'schedule_next' => Scheduler::next() ) );
 	}
 
 	private function confirmed( WP_REST_Request $request, string $word ): ?WP_Error {
