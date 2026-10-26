@@ -200,7 +200,17 @@ export interface Snapshot {
     verified?: boolean;
     verification?: SnapshotVerification;
     cloud?: { key?: string; pushed_at?: string; pulled_from?: string; bytes?: number };
+    safe_update?: SafeUpdateCheck;
   };
+}
+
+/** Safe Updates' check of the update batch a snapshot was taken for (Services/SafeUpdates.php). */
+export interface SafeUpdateCheck {
+  status: 'watching' | 'passed' | 'unverified' | 'undone' | 'undo_failed';
+  message?: string;
+  checked_at?: string;
+  error?: { message: string; file: string; line: number } | null;
+  culprit?: { type: string; slug: string; name: string; old_version: string; new_version: string | null } | null;
 }
 
 /** A plugin / theme folder archived before an update (Services/Snapshot/FileArchive.php). */
@@ -227,6 +237,7 @@ export type RestoreMode = 'full' | 'db' | 'files';
 
 export interface ChronoSettings {
   auto_snapshot: boolean;
+  safe_updates: boolean;
   auto_retention: number;
   storage_warn_mb: number;
   rollback_max_mb: number;

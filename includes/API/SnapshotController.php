@@ -232,6 +232,7 @@ final class SnapshotController extends RestController {
 					'callback' => array( $this, 'update_settings' ),
 					'args'     => array(
 						'auto_snapshot'   => array( 'type' => 'boolean' ),
+						'safe_updates'    => array( 'type' => 'boolean' ),
 						'auto_retention'  => array( 'type' => 'integer', 'minimum' => 1, 'maximum' => 50 ),
 						'storage_warn_mb' => array( 'type' => 'integer', 'minimum' => 1, 'maximum' => 1048576 ),
 						'rollback_max_mb' => array( 'type' => 'integer', 'minimum' => 1, 'maximum' => 10240 ),
@@ -385,7 +386,7 @@ final class SnapshotController extends RestController {
 
 	public function update_settings( WP_REST_Request $request ): \WP_REST_Response {
 		$changes = array();
-		foreach ( array( 'auto_snapshot', 'auto_retention', 'storage_warn_mb', 'rollback_max_mb' ) as $key ) {
+		foreach ( array( 'auto_snapshot', 'safe_updates', 'auto_retention', 'storage_warn_mb', 'rollback_max_mb' ) as $key ) {
 			if ( null !== $request[ $key ] ) {
 				$changes[ $key ] = $request[ $key ];
 			}

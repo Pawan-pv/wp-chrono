@@ -634,14 +634,19 @@ final class SnapshotService {
 		$lock    = get_transient( self::AUTO_LOCK );
 		if ( false === $lock ) {
 			set_transient( self::AUTO_LOCK, array( 'snapshot' => 0 ), self::AUTO_LOCK_TTL );
-			$subject = $hook_extra['plugin'] ?? $hook_extra['theme'] ?? ( $hook_extra['type'] ?? 'update' );
-			$result  = $service->create_and_build( 'Before updating ' . $subject, 'auto' );
+			// Probe before anything is replaced: the baseline Safe Updates compares against.
+			$baseline = SafeUpdates::enabled() ? SafeUpdates::probe() : null;
+			$subject  = $hook_extra['plugin'] ?? $hook_extra['theme'] ?? ( $hook_extra['type'] ?? 'update' );
+			$result   = $service->create_and_build( 'Before updating ' . $subject, 'auto' );
 			if ( is_wp_error( $result ) ) {
 				error_log( 'WP Chrono: auto-snapshot failed: ' . $result->get_error_message() ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions
 				return $response;
 			}
 			$lock = array( 'snapshot' => (int) $result['id'] );
 			set_transient( self::AUTO_LOCK, $lock, self::AUTO_LOCK_TTL );
+			if ( null !== $baseline ) {
+				SafeUpdates::watch( (int) $result['id'], $baseline );
+			}
 		}
 
 		$snapshot_id = is_array( $lock ) ? (int) ( $lock['snapshot'] ?? 0 ) : 0;

@@ -13,6 +13,7 @@ namespace WPChrono\Core;
 
 use WPChrono\API\Router;
 use WPChrono\CLI\Commands;
+use WPChrono\Services\SafeUpdates;
 use WPChrono\Services\SnapshotService;
 use WPChrono\Services\Updater;
 
@@ -54,6 +55,7 @@ final class Plugin {
 			add_filter( 'upgrader_pre_install', array( SnapshotService::class, 'before_update' ), 10, 2 );
 			add_filter( 'upgrader_post_install', array( SnapshotService::class, 'after_update' ), 10, 3 );
 			Updater::register();
+			SafeUpdates::register();
 		}
 
 		if ( $cli ) {

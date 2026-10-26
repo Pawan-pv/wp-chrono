@@ -21,6 +21,13 @@ WP Chrono is a time machine for your WordPress database and the plugins you upda
 * **Full Undo** puts back the old files and the old database together, so the old plugin never runs against a migrated database. Or restore *Database Only* / *Files Only*.
 * Archives are SHA-256 verified; folders are swapped with atomic renames, so a failed restore never leaves a half-written plugin behind.
 
+= Safe Updates: broken updates undo themselves =
+
+* After every update — from wp-admin, WP-CLI or WordPress's background auto-updates — WP Chrono loads your home page (and wp-admin) the way WordPress itself checks for fatal errors.
+* If the update broke a page that worked before, it is **undone automatically: files and database**, from the snapshot taken seconds earlier. You get an email and an admin notice naming the plugin and the error.
+* That exact version is then never auto-updated again (a newer one is). WordPress's own auto-update rollback only restores plugin files, and only for auto-updates.
+* It never guesses: if your host blocks the check, nothing is undone and the snapshot says "Update not checked". Free, on by default; turn it off under Settings.
+
 = Snapshots with atomic restore =
 
 * Chunked snapshot creation that survives shared-hosting time limits (tested with 240,000+ rows).
@@ -94,6 +101,10 @@ During any undo that swaps both files and database, visitors see WordPress's sta
 Yes. Nginx ignores `.htaccess`, so WP Chrono stores everything in a `wp-content/wp-chrono-<random>` folder and gives every database export a random 32-character file name; downloads always go through a logged-in, nonce-checked request. For defense in depth, add this to your server block, above the `location ~ \.php$` block (nginx checks regex locations in order):
 
 `location ~* "^/wp-content/wp-chrono-[A-Za-z0-9]{16}/" { deny all; }`
+
+= What exactly does Safe Updates undo, and what does it keep? =
+
+Everything the update batch changed: the plugin / theme folders it replaced and the whole database, back to the snapshot taken just before the update. Anything written to the database in the minute or so between that snapshot and the undo (for example a new order or comment) is rolled back too, which is the price of getting a working site back automatically. The snapshot itself is kept, so nothing is lost for good.
 
 = Does WP Chrono slow down my site? =
 

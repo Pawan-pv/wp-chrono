@@ -23,6 +23,7 @@ const FREE = [
   'Full & partial resets with dry runs',
   'Snapshots, auto-snapshots before updates, diff',
   'Every restore — incl. Full Undo of plugin updates',
+  'Safe Updates: broken updates undone automatically',
   'Import your .sql.gz backups',
   'Emergency Recovery Script',
   'Pull backups from your cloud bucket',
@@ -128,6 +129,21 @@ export function SettingsDialog({ open, onOpenChange, tab, onTabChange }: Setting
                 <span className="text-xs text-muted-foreground">Includes plugin / theme file archives for Full Undo.</span>
               </span>
               <Switch checked={settings?.auto_snapshot ?? false} disabled={!settings} onCheckedChange={(v) => setSettings((s) => (s ? { ...s, auto_snapshot: v } : s))} />
+            </label>
+            <label className="flex cursor-pointer items-center justify-between gap-4 rounded-lg border p-3">
+              <span className="flex flex-col">
+                <span className="text-sm font-medium">Safe Updates</span>
+                <span className="text-xs text-muted-foreground">
+                  After each update, check that the site still loads. If it broke, undo the update (files + database) automatically and email you.
+                </span>
+              </span>
+              <Switch
+                checked={(settings?.auto_snapshot && settings.safe_updates) ?? false}
+                disabled={!settings?.auto_snapshot}
+                onCheckedChange={(v) => setSettings((s) => (s ? { ...s, safe_updates: v } : s))}
+                aria-label="Safe Updates"
+                data-e2e="safe-updates-switch"
+              />
             </label>
             <label className="flex items-center justify-between gap-4 text-sm">
               Keep the newest auto-snapshots

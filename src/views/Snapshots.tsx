@@ -44,7 +44,7 @@ import type { RouteParams } from '@/hooks/useHashRoute';
 import { api } from '@/lib/api';
 import { formatBytes, formatNumber, timeAgo } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import type { ChronoSettings, CloudTick, ExportTick, Snapshot, SnapshotIndex } from '@/types';
+import type { ChronoSettings, CloudTick, ExportTick, SafeUpdateCheck, Snapshot, SnapshotIndex } from '@/types';
 
 const TRIGGERS: Record<Snapshot['trigger_type'], { label: string; icon: typeof Hand; className: string }> = {
   manual: { label: 'Manual', icon: Hand, className: 'bg-secondary text-secondary-foreground' },
@@ -437,6 +437,25 @@ interface SnapshotRowProps {
 
 const rollbackFiles = (s: Snapshot) => s.meta.rollback?.files ?? [];
 
+const SAFE_UPDATE: Record<SafeUpdateCheck['status'], { label: string; variant: 'success' | 'warning' | 'destructive' | 'outline' }> = {
+  watching: { label: 'Checking update…', variant: 'outline' },
+  passed: { label: 'Update checked', variant: 'success' },
+  unverified: { label: 'Update not checked', variant: 'outline' },
+  undone: { label: 'Broken update undone', variant: 'warning' },
+  undo_failed: { label: 'Auto-undo failed', variant: 'destructive' },
+};
+
+/** Safe Updates' verdict on the update batch this snapshot was taken for. */
+function SafeUpdateBadge({ check }: { check: SafeUpdateCheck }) {
+  const look = SAFE_UPDATE[check.status] ?? SAFE_UPDATE.unverified;
+  return (
+    <Badge variant={look.variant} title={check.message} data-e2e-safe-update={check.status}>
+      <ShieldCheck className="h-3 w-3" />
+      {look.label}
+    </Badge>
+  );
+}
+
 function SnapshotRow({ snapshot: s, last, busy, onDiff, onRestore, onExport, onDelete, onResume, onPush }: SnapshotRowProps) {
   const trigger = TRIGGERS[s.trigger_type] ?? TRIGGERS.manual;
   const TriggerIcon = trigger.icon;
@@ -486,8 +505,14 @@ function SnapshotRow({ snapshot: s, last, busy, onDiff, onRestore, onExport, onD
               {files.length} {files.length === 1 ? 'folder' : 'folders'} archived
             </Badge>
           )}
+          {s.meta.safe_update && <SafeUpdateBadge check={s.meta.safe_update} />}
           {s.meta.last_restored_at && <Badge variant="outline">restored {timeAgo(s.meta.last_restored_at)}</Badge>}
         </div>
+        {(s.meta.safe_update?.status === 'undone' || s.meta.safe_update?.status === 'undo_failed') && (
+          <p className="text-xs text-destructive" data-e2e-safe-message>
+            {s.meta.safe_update.message}
+          </p>
+        )}
         {files.length > 0 && (
           <p className="truncate text-xs text-muted-foreground">
             {files.map((f) => `${f.slug} ${f.old_version || '?'} → ${f.new_version ?? '?'}`).join(' · ')}
