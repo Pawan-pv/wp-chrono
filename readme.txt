@@ -15,9 +15,10 @@ WP Chrono is a time machine for your WordPress database and the plugins you upda
 
 **Restoring is always free.** Snapshots, every kind of restore, importing your own backups and the recovery script are never behind a paywall.
 
-= Undo plugin & theme updates (files + database) =
+= Undo plugin, theme & WordPress updates (files + database) =
 
 * Before every update batch, WP Chrono snapshots the database **and** zips the plugin / theme folders that are about to be replaced — one snapshot per batch, even when you update ten plugins at once.
+* **WordPress core updates too**: `wp-admin`, `wp-includes` and the core files in your site root are archived before the update (never `wp-config.php` or `wp-content`), so a major WordPress release can be undone — also from the Emergency Recovery Script when the update took the site down.
 * **Full Undo** puts back the old files and the old database together, so the old plugin never runs against a migrated database. Or restore *Database Only* / *Files Only*.
 * Archives are SHA-256 verified; folders are swapped with atomic renames, so a failed restore never leaves a half-written plugin behind.
 
@@ -131,6 +132,10 @@ Settings & License (the gear icon) → License, paste the key and click Activate
 5. Blueprints & Cloud.
 
 == Changelog ==
+
+= 1.0.2 =
+* New: WordPress core updates are snapshotted and archived (wp-admin, wp-includes, root files) and can be undone with Full Undo or from the Emergency Recovery Script. Safe Updates checks core updates too and undoes one that breaks the site.
+* Fix: restoring a snapshot taken during an update brought back WordPress's update lock, blocking updates for 15 minutes.
 
 = 1.0.1 =
 * New: **Safe Updates**. After every update WP Chrono checks that the site still loads; if the update broke it, the update is undone automatically (files + database), you get an email and an admin notice, and that version is not auto-installed again.

@@ -636,7 +636,7 @@ final class SnapshotService {
 			set_transient( self::AUTO_LOCK, array( 'snapshot' => 0 ), self::AUTO_LOCK_TTL );
 			// Probe before anything is replaced: the baseline Safe Updates compares against.
 			$baseline = SafeUpdates::enabled() ? SafeUpdates::probe() : null;
-			$subject  = $hook_extra['plugin'] ?? $hook_extra['theme'] ?? ( $hook_extra['type'] ?? 'update' );
+			$subject  = 'core' === ( $hook_extra['type'] ?? '' ) ? 'WordPress ' . FileArchive::core_version() : ( $hook_extra['plugin'] ?? $hook_extra['theme'] ?? ( $hook_extra['type'] ?? 'update' ) );
 			$result   = $service->create_and_build( 'Before updating ' . $subject, 'auto' );
 			if ( is_wp_error( $result ) ) {
 				error_log( 'WP Chrono: auto-snapshot failed: ' . $result->get_error_message() ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions
@@ -654,6 +654,49 @@ final class SnapshotService {
 			$service->attach_archives( $snapshot_id, FileArchive::targets( $hook_extra ) );
 		}
 		return $response;
+	}
+
+	/**
+	 * `upgrader_pre_download` filter, for WordPress core only: Core_Upgrader
+	 * never fires upgrader_pre_install, and this runs before the package is
+	 * unpacked or any file is copied. Snapshots the database and archives
+	 * wp-admin, wp-includes and the root core files (FileArchive::core_targets()).
+	 *
+	 * @param false|string|WP_Error $reply
+	 * @param string                $package
+	 * @param \WP_Upgrader|mixed    $upgrader
+	 * @return false|string|WP_Error Unchanged.
+	 */
+	public static function before_core_update( $reply, $package, $upgrader ) {
+		if ( false === $reply && $upgrader instanceof \Core_Upgrader ) {
+			self::before_update( true, array( 'type' => 'core', 'action' => 'update' ) );
+		}
+		return $reply;
+	}
+
+	/**
+	 * `_core_updated_successfully`: records the version core was updated to.
+	 * (In wp-admin, core redirects to the About page and exits right after
+	 * this action, before upgrader_process_complete.)
+	 */
+	public static function after_core_update(): void {
+		$lock = get_transient( self::AUTO_LOCK );
+		if ( ! is_array( $lock ) || empty( $lock['snapshot'] ) ) {
+			return;
+		}
+		$service  = new self();
+		$snapshot = $service->get( (int) $lock['snapshot'] );
+		if ( is_wp_error( $snapshot ) ) {
+			return;
+		}
+		$files   = self::rollback_files( $snapshot );
+		$version = FileArchive::core_version();
+		foreach ( $files as $i => $entry ) {
+			if ( 'core' === $entry['type'] ) {
+				$files[ $i ]['new_version'] = $version;
+			}
+		}
+		$service->update_meta( (int) $lock['snapshot'], array( 'rollback' => array_merge( (array) ( $snapshot['meta']['rollback'] ?? array() ), array( 'files' => $files ) ) ) );
 	}
 
 	/**

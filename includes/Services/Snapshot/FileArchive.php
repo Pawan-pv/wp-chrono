@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin / theme file archives for full update rollback.
+ * Plugin / theme / WordPress core file archives for full update rollback.
  *
  * Before an update overwrites a plugin or theme, its folder is zipped into
  * `{storage}/rollbacks/snap-{id}-{type}-{slug}-{version}.zip` and recorded in
@@ -17,6 +17,10 @@
  * Dot-prefixed folders are skipped by get_plugins() and theme discovery, so
  * staged copies are invisible to WordPress while they wait.
  *
+ * WordPress core is archived as type `core` entries: `wp-admin` and
+ * `wp-includes` as folders, each core file in the site root as a single-file
+ * entry. wp-config.php, .htaccess and wp-content are never part of it.
+ *
  * @package WPChrono
  */
 
@@ -32,6 +36,25 @@ final class FileArchive {
 
 	const DIR = 'rollbacks';
 
+	/** Files WordPress ships in its root directory (archived with core updates). */
+	const CORE_ROOT_FILES = array(
+		'index.php',
+		'license.txt',
+		'readme.html',
+		'wp-activate.php',
+		'wp-blog-header.php',
+		'wp-comments-post.php',
+		'wp-config-sample.php',
+		'wp-cron.php',
+		'wp-links-opml.php',
+		'wp-load.php',
+		'wp-login.php',
+		'wp-mail.php',
+		'wp-settings.php',
+		'wp-signup.php',
+		'wp-trackback.php',
+		'xmlrpc.php',
+	);
 
 	/**
 	 * Plugins / themes an upgrader package is about to replace.
@@ -40,6 +63,9 @@ final class FileArchive {
 	 * @return array<int,array{type:string,slug:string,file:string,path:string,single:bool}>
 	 */
 	public static function targets( array $hook_extra ): array {
+		if ( 'core' === ( $hook_extra['type'] ?? '' ) ) {
+			return self::core_targets();
+		}
 		$targets = array();
 		foreach ( array_merge( (array) ( $hook_extra['plugin'] ?? array() ), (array) ( $hook_extra['plugins'] ?? array() ) ) as $file ) {
 			$file = wp_normalize_path( (string) $file );
@@ -74,12 +100,41 @@ final class FileArchive {
 	}
 
 	/**
+	 * WordPress core as archive targets: wp-admin, wp-includes and the core
+	 * files in the site root.
+	 *
+	 * @return array<int,array{type:string,slug:string,file:string,path:string,single:bool}>
+	 */
+	public static function core_targets(): array {
+		$root    = untrailingslashit( wp_normalize_path( ABSPATH ) );
+		$targets = array();
+		foreach ( array( 'wp-admin' => 'index.php', 'wp-includes' => 'version.php' ) as $dir => $marker ) {
+			$targets[] = array( 'type' => 'core', 'slug' => $dir, 'file' => "{$dir}/{$marker}", 'path' => "{$root}/{$dir}", 'single' => false );
+		}
+		foreach ( self::CORE_ROOT_FILES as $file ) {
+			if ( is_file( "{$root}/{$file}" ) ) {
+				$targets[] = array( 'type' => 'core', 'slug' => $file, 'file' => $file, 'path' => "{$root}/{$file}", 'single' => true );
+			}
+		}
+		return $targets;
+	}
+
+	/** The WordPress version on disk (wp-includes/version.php), not the one loaded in memory. */
+	public static function core_version(): string {
+		$source = (string) @file_get_contents( ABSPATH . WPINC . '/version.php' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors, WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+		return preg_match( '/\$wp_version\s*=\s*[\'"]([^\'"]+)[\'"]/', $source, $m ) ? $m[1] : '';
+	}
+
+	/**
 	 * Version currently on disk, read straight from the file header so stale
 	 * plugin / theme caches can't report the wrong one.
 	 *
 	 * @param array{type:string,file:string,path:string} $target
 	 */
 	public static function version( array $target ): string {
+		if ( 'core' === $target['type'] ) {
+			return self::core_version();
+		}
 		$header = 'theme' === $target['type'] ? $target['path'] . '/style.css' : WP_PLUGIN_DIR . '/' . $target['file'];
 		if ( ! is_file( $header ) ) {
 			return '';
@@ -121,8 +176,12 @@ final class FileArchive {
 			return $ok;
 		}
 
-		$header = 'theme' === $target['type'] ? $path . '/style.css' : WP_PLUGIN_DIR . '/' . $target['file'];
-		$label  = is_file( $header ) ? (string) get_file_data( $header, array( 'n' => 'theme' === $target['type'] ? 'Theme Name' : 'Plugin Name' ) )['n'] : '';
+		if ( 'core' === $target['type'] ) {
+			$label = 'WordPress';
+		} else {
+			$header = 'theme' === $target['type'] ? $path . '/style.css' : WP_PLUGIN_DIR . '/' . $target['file'];
+			$label  = is_file( $header ) ? (string) get_file_data( $header, array( 'n' => 'theme' === $target['type'] ? 'Theme Name' : 'Plugin Name' ) )['n'] : '';
+		}
 
 		return array(
 			'type'        => $target['type'],

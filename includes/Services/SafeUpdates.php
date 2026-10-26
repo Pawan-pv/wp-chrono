@@ -10,8 +10,9 @@
  *    (`wp_scrape_key`), the mechanism core uses for its auto-update rollback.
  *    The result is the baseline, stored on the snapshot.
  * 2. When the batch is done the probe runs again: `upgrader_process_complete`
- *    for updates from wp-admin / WP-CLI, `automatic_updates_complete` for
- *    background auto-updates (after core's own per-plugin check).
+ *    for updates from wp-admin / WP-CLI, `_core_updated_successfully` for
+ *    WordPress core (wp-admin exits right after it), `automatic_updates_complete`
+ *    for background auto-updates (after core's own per-plugin check).
  * 3. A page that worked before and now has a PHP fatal error or a 5xx — or a
  *    plugin core already had to roll back — means the batch is undone with
  *    Full Undo, the admin is told (updater screen / WP-CLI, admin notice,
@@ -43,11 +44,16 @@ final class SafeUpdates {
 	/** Core 6.6+ auto-update results that mean "this update fataled". */
 	const CORE_ROLLBACK_CODES = array( 'plugin_update_fatal_error_rollback_successful', 'plugin_update_fatal_error_rollback_failed' );
 
+	/** @var array<int,bool> Snapshots already checked in this request. */
+	private static $checked = array();
+
 	public static function register(): void {
 		add_action( 'upgrader_process_complete', array( self::class, 'after_batch' ), 20, 2 );
+		add_action( '_core_updated_successfully', array( self::class, 'after_core_update' ), 5 );
 		add_action( 'automatic_updates_complete', array( self::class, 'after_auto_updates' ) );
 		add_filter( 'auto_update_plugin', array( self::class, 'allow_auto_update' ), 20, 2 );
 		add_filter( 'auto_update_theme', array( self::class, 'allow_auto_update' ), 20, 2 );
+		add_filter( 'auto_update_core', array( self::class, 'allow_auto_update' ), 20, 2 );
 		if ( is_admin() ) {
 			add_action( 'admin_notices', array( self::class, 'notice' ) );
 			add_action( 'admin_init', array( self::class, 'maybe_dismiss' ) );
@@ -185,16 +191,40 @@ final class SafeUpdates {
 	 */
 	public static function after_batch( $upgrader, $hook_extra ): void {
 		$hook_extra = (array) $hook_extra;
-		if ( 'update' !== ( $hook_extra['action'] ?? '' ) || ! in_array( $hook_extra['type'] ?? '', array( 'plugin', 'theme' ), true ) || did_action( 'pre_auto_update' ) ) {
+		if ( 'update' !== ( $hook_extra['action'] ?? '' ) || ! in_array( $hook_extra['type'] ?? '', array( 'plugin', 'theme', 'core' ), true ) || did_action( 'pre_auto_update' ) ) {
 			return;
 		}
 		$id = self::watched();
-		if ( ! $id ) {
+		if ( ! $id || isset( self::$checked[ $id ] ) ) {
 			return;
 		}
 		$outcome = self::check( $id );
 		if ( isset( $outcome['message'] ) && 'passed' !== $outcome['status'] && 'unverified' !== $outcome['status'] ) {
 			self::tell_updater( $upgrader, (string) $outcome['message'] );
+		}
+	}
+
+	/**
+	 * `_core_updated_successfully` (priority 5, before SnapshotService records
+	 * nothing more and before wp-admin's redirect to the About page exits).
+	 * After an undo the redirect is dropped so the update screen shows why.
+	 */
+	public static function after_core_update(): void {
+		if ( did_action( 'pre_auto_update' ) ) {
+			return;
+		}
+		$id = self::watched();
+		if ( ! $id || isset( self::$checked[ $id ] ) ) {
+			return;
+		}
+		$outcome = self::check( $id );
+		if ( in_array( $outcome['status'], array( 'undone', 'undo_failed' ), true ) ) {
+			remove_action( '_core_updated_successfully', '_redirect_to_about_wordpress' );
+			if ( defined( 'WP_CLI' ) && WP_CLI ) {
+				\WP_CLI::warning( (string) $outcome['message'] );
+			} elseif ( function_exists( 'show_message' ) ) {
+				show_message( '<strong>' . esc_html( (string) $outcome['message'] ) . '</strong>' );
+			}
 		}
 	}
 
@@ -249,6 +279,7 @@ final class SafeUpdates {
 		if ( is_wp_error( $snapshot ) ) {
 			return array( 'status' => 'unverified', 'message' => $snapshot->get_error_message() );
 		}
+		self::$checked[ $snapshot_id ] = true;
 		$state    = (array) ( $snapshot['meta']['safe_update'] ?? array() );
 		$baseline = (array) ( $state['baseline'] ?? array() );
 		$items    = self::items( $snapshot );
@@ -347,7 +378,15 @@ final class SafeUpdates {
 	 */
 	private static function items( array $snapshot ): array {
 		$items = array();
+		$core  = false;
 		foreach ( SnapshotService::rollback_files( $snapshot ) as $entry ) {
+			if ( 'core' === ( $entry['type'] ?? '' ) ) {
+				if ( ! $core ) { // wp-admin, wp-includes and the root files are one update.
+					$items[] = array( 'type' => 'core', 'slug' => 'wordpress', 'file' => 'wordpress', 'name' => 'WordPress', 'old_version' => $entry['old_version'] ?? '', 'new_version' => $entry['new_version'] ?? null );
+					$core    = true;
+				}
+				continue;
+			}
 			$items[] = array_intersect_key( (array) $entry, array_flip( array( 'type', 'slug', 'file', 'name', 'old_version', 'new_version' ) ) );
 		}
 		return $items;
@@ -366,6 +405,12 @@ final class SafeUpdates {
 			return count( $items ) === 1 ? $items[0] : null;
 		}
 		foreach ( $items as $item ) {
+			if ( 'core' === $item['type'] ) {
+				if ( preg_match( '#^(wp-admin/|wp-includes/|[a-z-]+\.php$)#', ltrim( $file, '/' ) ) ) {
+					return $item;
+				}
+				continue;
+			}
 			$needle = ( 'theme' === $item['type'] ? 'themes/' : 'plugins/' ) . $item['slug'];
 			if ( false !== strpos( $file, $needle . '/' ) || str_ends_with( $file, $needle ) ) {
 				return $item;
@@ -408,7 +453,7 @@ final class SafeUpdates {
 		if ( 'undone' === $outcome['status'] ) {
 			foreach ( $outcome['culprit'] ? array( $outcome['culprit'] ) : $outcome['items'] as $item ) {
 				if ( ! empty( $item['new_version'] ) ) {
-					$blocked[ ( 'theme' === $item['type'] ? 'theme:' : 'plugin:' ) . $item['file'] ] = (string) $item['new_version'];
+					$blocked[ $item['type'] . ':' . $item['file'] ] = (string) $item['new_version'];
 				}
 			}
 		}
@@ -435,17 +480,24 @@ final class SafeUpdates {
 	}
 
 	/**
-	 * `auto_update_plugin` / `auto_update_theme`: never auto-install a version
-	 * Safe Updates had to undo. Newer versions, and manual updates, still go.
+	 * `auto_update_plugin` / `auto_update_theme` / `auto_update_core`: never
+	 * auto-install a version Safe Updates had to undo. Newer versions, and
+	 * manual updates, still go.
 	 *
 	 * @param bool|null $update
 	 * @param object    $item
 	 * @return bool|null
 	 */
 	public static function allow_auto_update( $update, $item ) {
-		$key = isset( $item->plugin ) ? 'plugin:' . $item->plugin : ( isset( $item->theme ) ? 'theme:' . $item->theme : '' );
+		if ( 'auto_update_core' === current_filter() ) {
+			$key     = 'core:wordpress';
+			$version = (string) ( $item->current ?? '' );
+		} else {
+			$key     = isset( $item->plugin ) ? 'plugin:' . $item->plugin : ( isset( $item->theme ) ? 'theme:' . $item->theme : '' );
+			$version = (string) ( $item->new_version ?? '' );
+		}
 		$bad = self::state()['blocked'][ $key ] ?? null;
-		return null !== $bad && (string) ( $item->new_version ?? '' ) === $bad ? false : $update;
+		return null !== $bad && $version === $bad ? false : $update;
 	}
 
 	/**

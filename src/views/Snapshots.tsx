@@ -352,8 +352,8 @@ export function Snapshots({ params, clearParams }: SnapshotsProps) {
           restoring
             ? [
                 `${restoring.label || 'Untitled'} · ${formatNumber(restoring.row_count)} rows · ${formatBytes(restoring.size_bytes)}`,
-                ...rollbackFiles(restoring).map(
-                  (f) => `${f.type} ${f.slug}: ${f.new_version ?? 'updated'} → ${f.old_version || '?'} (archived, ${formatBytes(f.bytes)})`,
+                ...archivedItems(restoring).items.map(
+                  (f) => `${f.type} ${f.slug}: ${f.to === '?' ? 'updated' : f.to} → ${f.from} (archived, ${formatBytes(f.bytes)})`,
                 ),
                 'Your account and current login session are carried over.',
                 'WP Chrono settings and other snapshots are not affected.',
@@ -437,6 +437,19 @@ interface SnapshotRowProps {
 
 const rollbackFiles = (s: Snapshot) => s.meta.rollback?.files ?? [];
 
+/** Archived items for display: WordPress core (wp-admin, wp-includes, root files) as one entry. */
+function archivedItems(s: Snapshot) {
+  const files = rollbackFiles(s);
+  const core = files.filter((f) => f.type === 'core');
+  const rest = files.filter((f) => f.type !== 'core');
+  const items = rest.map((f) => ({ type: f.type as string, slug: f.slug, from: f.old_version || '?', to: f.new_version ?? '?', bytes: f.bytes }));
+  if (core.length) {
+    items.unshift({ type: 'core', slug: 'WordPress', from: core[0].old_version || '?', to: core[0].new_version ?? '?', bytes: core.reduce((n, f) => n + f.bytes, 0) });
+  }
+  const label = [core.length ? 'WordPress core' : '', rest.length ? `${rest.length} ${rest.length === 1 ? 'folder' : 'folders'}` : ''].filter(Boolean).join(' + ');
+  return { items, label };
+}
+
 const SAFE_UPDATE: Record<SafeUpdateCheck['status'], { label: string; variant: 'success' | 'warning' | 'destructive' | 'outline' }> = {
   watching: { label: 'Checking update…', variant: 'outline' },
   passed: { label: 'Update checked', variant: 'success' },
@@ -462,6 +475,7 @@ function SnapshotRow({ snapshot: s, last, busy, onDiff, onRestore, onExport, onD
   const ready = s.status === 'ready';
   const lastExport = s.meta.exports?.[s.meta.exports.length - 1];
   const files = rollbackFiles(s);
+  const archived = archivedItems(s);
 
   return (
     <li className="relative flex flex-wrap items-center gap-x-4 gap-y-3 border-b px-4 py-4 last:border-0 sm:pl-14">
@@ -500,9 +514,9 @@ function SnapshotRow({ snapshot: s, last, busy, onDiff, onRestore, onExport, onD
             </Badge>
           )}
           {files.length > 0 && (
-            <Badge variant="outline" title={files.map((f) => `${f.slug} ${f.old_version} → ${f.new_version ?? '?'}`).join('\n')} data-e2e-files>
+            <Badge variant="outline" title={archived.items.map((f) => `${f.slug} ${f.from} → ${f.to}`).join('\n')} data-e2e-files>
               <FileArchive className="h-3 w-3" />
-              {files.length} {files.length === 1 ? 'folder' : 'folders'} archived
+              {archived.label} archived
             </Badge>
           )}
           {s.meta.safe_update && <SafeUpdateBadge check={s.meta.safe_update} />}
@@ -515,7 +529,7 @@ function SnapshotRow({ snapshot: s, last, busy, onDiff, onRestore, onExport, onD
         )}
         {files.length > 0 && (
           <p className="truncate text-xs text-muted-foreground">
-            {files.map((f) => `${f.slug} ${f.old_version || '?'} → ${f.new_version ?? '?'}`).join(' · ')}
+            {archived.items.map((f) => `${f.slug} ${f.from} → ${f.to}`).join(' · ')}
           </p>
         )}
         <p className="text-xs text-muted-foreground tabular-nums">

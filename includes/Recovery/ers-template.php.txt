@@ -599,7 +599,7 @@ function wpc_snapshots( Wpc_Ers_Db $db, $prefix, $multisite = false ) {
  * Atomic restore straight from SQL: copy into staging, one RENAME TABLE swap,
  * drop parked tables, re-add foreign keys — all with FOREIGN_KEY_CHECKS = 0.
  */
-function wpc_restore( Wpc_Ers_Db $db, array $snapshot, array $skip = array() ) {
+function wpc_restore( Wpc_Ers_Db $db, array $snapshot, array $skip = array(), $prefix = '' ) {
 	$job = substr( bin2hex( random_bytes( 4 ) ), 0, 6 );
 	// Multisite main site: network-wide tables (users, blogs…) are kept unless opted in.
 	$snapshot['tables'] = array_diff_key( $snapshot['tables'], array_flip( $skip ) );
@@ -650,6 +650,11 @@ function wpc_restore( Wpc_Ers_Db $db, array $snapshot, array $skip = array() ) {
 		}
 	}
 	$db->exec( 'SET FOREIGN_KEY_CHECKS = 1' );
+	// A snapshot taken during an update holds that update's lock; restored, it
+	// would block every update for 15 minutes.
+	if ( '' !== $prefix ) {
+		$db->exec( 'DELETE FROM ' . Wpc_Ers_Db::id( $prefix . 'options' ) . " WHERE option_name IN ('core_updater.lock', 'auto_updater.lock')" );
+	}
 	return array( true, sprintf( 'Restored snapshot #%d: %d tables, %s rows, atomic swap %d ms%s%s.', $snapshot['id'], count( $snapshot['tables'] ), number_format( $rows ), $swap_ms, $fks ? ", {$fks} foreign keys re-created" : '', $skip ? ', network tables kept' : '' ) );
 }
 
@@ -731,7 +736,7 @@ function wpc_stage_files( array $entries, $dir, $content_dir, $job ) {
 		$target = str_replace( '\\', '/', (string) ( $e['target'] ?? '' ) );
 		// The recorded path may come from another machine layout; fall back to this content dir.
 		if ( '' === $target || ! is_dir( dirname( $target ) ) ) {
-			$target = $content_dir . '/' . ( 'theme' === ( $e['type'] ?? '' ) ? 'themes' : 'plugins' ) . '/' . $slug;
+			$target = 'core' === ( $e['type'] ?? '' ) ? __DIR__ . '/' . $slug : $content_dir . '/' . ( 'theme' === ( $e['type'] ?? '' ) ? 'themes' : 'plugins' ) . '/' . $slug;
 		}
 		$zip_file = $dir . basename( (string) ( $e['zip'] ?? '' ) );
 		if ( '' === $slug || basename( $target ) !== basename( $slug ) || ! is_dir( dirname( $target ) ) ) {
@@ -990,7 +995,7 @@ if ( 'POST' === $method ) {
 			if ( ! isset( $snapshots[ $id ] ) ) {
 				wpc_redirect( 'Snapshot not found.', 'err' );
 			}
-			list( $ok, $msg ) = wpc_restore( $db, $snapshots[ $id ], wpc_network_skip( $defines, $prefix ) );
+			list( $ok, $msg ) = wpc_restore( $db, $snapshots[ $id ], wpc_network_skip( $defines, $prefix ), $prefix );
 			wpc_redirect( $msg, $ok ? 'ok' : 'err' );
 			break;
 
@@ -1021,7 +1026,7 @@ if ( 'POST' === $method ) {
 				wpc_maintenance_off( $offline );
 				wpc_redirect( $staged, 'err' );
 			}
-			list( $ok, $msg ) = wpc_restore( $db, $snapshots[ $id ], wpc_network_skip( $defines, $prefix ) );
+			list( $ok, $msg ) = wpc_restore( $db, $snapshots[ $id ], wpc_network_skip( $defines, $prefix ), $prefix );
 			if ( ! $ok ) {
 				foreach ( $staged as $item ) {
 					wpc_rmtree( $item['new'] );

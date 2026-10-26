@@ -324,6 +324,11 @@ final class Restorer {
 		// --- Repair the restored database ------------------------------------
 		Session::restore_options( $options );
 		delete_option( self::OPTION );
+		// A snapshot taken during an update (core snapshots are taken after
+		// Core_Upgrader locks) holds that update's lock; restored, it would
+		// block every update for 15 minutes.
+		delete_option( 'core_updater.lock' );
+		delete_option( 'auto_updater.lock' );
 		$active = (array) get_option( 'active_plugins', array() );
 		if ( ! in_array( WP_CHRONO_BASENAME, $active, true ) ) {
 			$active[] = WP_CHRONO_BASENAME;

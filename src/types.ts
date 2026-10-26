@@ -215,7 +215,7 @@ export interface SafeUpdateCheck {
 
 /** A plugin / theme folder archived before an update (Services/Snapshot/FileArchive.php). */
 export interface RollbackFile {
-  type: 'plugin' | 'theme';
+  type: 'plugin' | 'theme' | 'core';
   slug: string;
   file: string;
   old_version: string;

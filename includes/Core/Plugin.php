@@ -54,6 +54,9 @@ final class Plugin {
 		if ( is_admin() || wp_doing_cron() || $cli ) {
 			add_filter( 'upgrader_pre_install', array( SnapshotService::class, 'before_update' ), 10, 2 );
 			add_filter( 'upgrader_post_install', array( SnapshotService::class, 'after_update' ), 10, 3 );
+			// WordPress core: Core_Upgrader skips upgrader_pre_install / post_install.
+			add_filter( 'upgrader_pre_download', array( SnapshotService::class, 'before_core_update' ), 5, 3 );
+			add_action( '_core_updated_successfully', array( SnapshotService::class, 'after_core_update' ), 1 );
 			Updater::register();
 			SafeUpdates::register();
 		}
