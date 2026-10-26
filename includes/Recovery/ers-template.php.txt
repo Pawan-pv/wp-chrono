@@ -799,10 +799,19 @@ function wpc_maintenance_on( $config_file ) {
 	return $root . '/.maintenance';
 }
 
-function wpc_maintenance_off( $file ) {
-	if ( '' !== $file ) {
-		@unlink( $file );
+/**
+ * Ends maintenance mode. After a folder swap whose OPcache could not be reset
+ * (opcache.restrict_api), PHP keeps running the replaced code until OPcache
+ * re-checks the files, so stay offline until then.
+ */
+function wpc_maintenance_off( $file, $settle = false ) {
+	if ( '' === $file ) {
+		return;
 	}
+	if ( $settle ) {
+		sleep( min( 30, max( 0, (int) ini_get( 'opcache.revalidate_freq' ) ) + 1 ) );
+	}
+	@unlink( $file );
 }
 
 /** Two renames per folder (live → parked, staged → live); the live folder is put back if the second fails. */
@@ -842,9 +851,8 @@ function wpc_commit_files( array $staged ) {
 			}
 		}
 	}
-	if ( function_exists( 'opcache_reset' ) && filter_var( ini_get( 'opcache.enable' ), FILTER_VALIDATE_BOOLEAN ) ) {
-		@opcache_reset();
-	}
+	$enabled                     = filter_var( ini_get( 'opcache.enable' ), FILTER_VALIDATE_BOOLEAN );
+	$GLOBALS['wpc_stale_opcache'] = $done && $enabled && ! ( function_exists( 'opcache_reset' ) && @opcache_reset() );
 	return $done;
 }
 
@@ -1022,7 +1030,7 @@ if ( 'POST' === $method ) {
 				wpc_redirect( $msg . ' Plugin and theme files were left unchanged.', 'err' );
 			}
 			$reverted = wpc_commit_files( $staged );
-			wpc_maintenance_off( $offline );
+			wpc_maintenance_off( $offline, ! empty( $GLOBALS['wpc_stale_opcache'] ) );
 			wpc_redirect( sprintf( 'Undid the update: reverted %d of %d plugin/theme folder(s) (%s). %s', count( $reverted ), count( $staged ), implode( ', ', $reverted ), $msg ), count( $reverted ) === count( $staged ) ? 'ok' : 'err' );
 			break;
 

@@ -311,13 +311,15 @@ final class Restorer {
 
 		// The database now matches the snapshot; put back the matching files.
 		$files_restored = 0;
+		$stale_opcache  = false;
 		if ( ! empty( $job['files'] ) ) {
 			$files          = FileArchive::commit( (array) $job['files'] );
 			$files_restored = $files['restored'];
+			$stale_opcache  = $files_restored > 0 && empty( $files['opcache_cleared'] );
 			$log            = array_merge( $log, $files['log'] );
 			FileArchive::discard( array(), (string) $job['id'] );
 		}
-		FileArchive::maintenance_off( $offline );
+		FileArchive::maintenance_off( $offline, $stale_opcache );
 
 		// --- Repair the restored database ------------------------------------
 		Session::restore_options( $options );

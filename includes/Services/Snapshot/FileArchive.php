@@ -214,8 +214,8 @@ final class FileArchive {
 				}
 			}
 		}
-		self::flush_caches();
-		return array( 'restored' => $restored, 'log' => $log );
+		$cleared = self::flush_caches();
+		return array( 'restored' => $restored, 'log' => $log, 'opcache_cleared' => $cleared );
 	}
 
 	/**
@@ -306,26 +306,50 @@ final class FileArchive {
 		return true;
 	}
 
-	public static function maintenance_off( bool $created ): void {
-		if ( $created ) {
-			@unlink( ABSPATH . '.maintenance' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors, WordPress.WP.AlternativeFunctions.unlink_unlink
+	/**
+	 * @param bool $settle Folders were swapped but the web server's opcode
+	 *                     cache could not be cleared from here (WP-CLI,
+	 *                     restricted opcache_reset): PHP-FPM keeps running the
+	 *                     replaced code until OPcache re-checks the files, so
+	 *                     stay offline until it has.
+	 */
+	public static function maintenance_off( bool $created, bool $settle = false ): void {
+		if ( ! $created ) {
+			return;
 		}
+		if ( $settle ) {
+			/**
+			 * Seconds to stay in maintenance mode after a folder swap that could
+			 * not clear the web server's OPcache (default: opcache.revalidate_freq + 1).
+			 *
+			 * @param int $seconds
+			 */
+			$seconds = (int) apply_filters( 'wp_chrono_opcache_settle', max( 0, (int) ini_get( 'opcache.revalidate_freq' ) ) + 1 );
+			if ( $seconds > 0 ) {
+				sleep( min( 30, $seconds ) );
+			}
+		}
+		@unlink( ABSPATH . '.maintenance' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors, WordPress.WP.AlternativeFunctions.unlink_unlink
 	}
 
 	/**
 	 * Clears WordPress' plugin / theme caches and PHP's opcode cache so the
 	 * reverted code is what runs on the next request.
+	 *
+	 * @return bool Whether the web server's opcode cache is known to be clean:
+	 *              only from a web request, where opcache_reset() reaches the
+	 *              same cache visitors use (or no cache is on).
 	 */
-	public static function flush_caches(): void {
+	public static function flush_caches(): bool {
 		if ( function_exists( 'wp_clean_plugins_cache' ) ) {
 			wp_clean_plugins_cache();
 		}
 		if ( function_exists( 'wp_clean_themes_cache' ) ) {
 			wp_clean_themes_cache();
 		}
-		if ( function_exists( 'opcache_reset' ) && filter_var( ini_get( 'opcache.enable' ), FILTER_VALIDATE_BOOLEAN ) ) {
-			@opcache_reset(); // phpcs:ignore WordPress.PHP.NoSilencedErrors -- may be restricted by opcache.restrict_api.
-		}
+		$enabled = filter_var( ini_get( 'opcache.enable' ), FILTER_VALIDATE_BOOLEAN );
+		$reset   = $enabled && function_exists( 'opcache_reset' ) && @opcache_reset(); // phpcs:ignore WordPress.PHP.NoSilencedErrors -- may be restricted by opcache.restrict_api.
+		return 'cli' !== PHP_SAPI && ( $reset || ! $enabled );
 	}
 
 	// ---------------------------------------------------------------------
