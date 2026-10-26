@@ -3,7 +3,7 @@ Tags: reset, snapshot, rollback, backup, recovery
 Requires at least: 6.3
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.0.0
+Stable tag: 1.0.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -132,6 +132,13 @@ Settings & License (the gear icon) → License, paste the key and click Activate
 
 == Changelog ==
 
+= 1.0.1 =
+* New: **Safe Updates**. After every update WP Chrono checks that the site still loads; if the update broke it, the update is undone automatically (files + database), you get an email and an admin notice, and that version is not auto-installed again.
+* New: updates for WP Chrono itself, verified with a release signature before they are installed.
+* New: license keys can be checked against the WP Chrono license server (site limits, refunds); a key keeps working if the server can't be reached. Define `WP_CHRONO_LICENSE_SERVER` as `''` to stay offline.
+* Fix: during an undo, a request could run the updated plugin against the restored database and write its data back. The site now stays in maintenance mode for the whole swap, and until PHP's OPcache has dropped the replaced code.
+* Fix: a corrupt or truncated `.sql.gz` import is reported as a file problem (422) instead of a server error.
+
 = 1.0.0 =
 * First public release.
 * Full update rollback: plugin / theme files + database, from wp-admin, WP-CLI or the Emergency Recovery Script.
@@ -143,6 +150,9 @@ Settings & License (the gear icon) → License, paste the key and click Activate
 * Pro: Blueprints (Reset to Dev Baseline) and bring-your-own-bucket cloud offload; offline Ed25519 license keys.
 
 == Upgrade Notice ==
+
+= 1.0.1 =
+Adds Safe Updates (broken updates undo themselves) and fixes a rare race during undo. Recommended.
 
 = 1.0.0 =
 First public release.
