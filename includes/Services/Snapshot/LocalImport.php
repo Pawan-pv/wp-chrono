@@ -35,6 +35,12 @@ final class LocalImport {
 	/** Largest chunk the client should send (also capped by PHP's upload limits). */
 	const MAX_CHUNK = 8388608;
 
+	/** Default compressed upload limit; hosts can lower or raise it deliberately. */
+	const DEFAULT_MAX_BYTES = 2147483648;
+
+	/** Keep a little headroom for the database and PHP temporary files. */
+	const FREE_SPACE_RESERVE = 16777216;
+
 	/** @var SnapshotService */
 	private $snapshots;
 
@@ -44,6 +50,22 @@ final class LocalImport {
 
 	public static function max_chunk(): int {
 		return (int) max( 65536, min( self::MAX_CHUNK, wp_max_upload_size() - 65536 ) );
+	}
+
+	/**
+	 * Maximum compressed import size. This is enforced server-side as well as
+	 * advertised to the browser, because an authenticated caller can bypass the
+	 * SPA and send arbitrary multipart chunks directly.
+	 */
+	public static function max_import_bytes(): int {
+		$limit = (int) apply_filters( 'wp_chrono_import_max_bytes', self::DEFAULT_MAX_BYTES );
+		return max( 16 * 1024 * 1024, min( 16 * self::DEFAULT_MAX_BYTES, $limit ) );
+	}
+
+	/** Maximum decompressed SQL size, protecting the host from gzip bombs. */
+	public static function max_decompressed_bytes_for_importer(): int {
+		$limit = (int) apply_filters( 'wp_chrono_import_max_decompressed_bytes', 4 * self::max_import_bytes() );
+		return max( 64 * 1024 * 1024, min( 32 * self::DEFAULT_MAX_BYTES, $limit ) );
 	}
 
 	/**
@@ -70,14 +92,34 @@ final class LocalImport {
 		if ( $offset !== $have ) {
 			return new WP_Error( 'wp_chrono_import_offset', sprintf( 'Expected the chunk at byte %d, got %d.', $have, $offset ), array( 'status' => 409, 'expected' => $have ) );
 		}
+		$chunk_bytes = filesize( $chunk_path );
+		if ( false === $chunk_bytes || $chunk_bytes > self::MAX_CHUNK ) {
+			return new WP_Error( 'wp_chrono_import_chunk', sprintf( 'Each upload chunk must be at most %s.', size_format( self::MAX_CHUNK ) ), array( 'status' => 413 ) );
+		}
+		if ( $have > self::max_import_bytes() - $chunk_bytes ) {
+			return new WP_Error( 'wp_chrono_import_size', sprintf( 'This import exceeds the %s upload limit.', size_format( self::max_import_bytes() ) ), array( 'status' => 413 ) );
+		}
+		$free = disk_free_space( dirname( $job['path'] ) );
+		if ( false !== $free && $free < $chunk_bytes + self::FREE_SPACE_RESERVE ) {
+			return new WP_Error( 'wp_chrono_import_disk', 'There is not enough free disk space to continue this import.', array( 'status' => 507 ) );
+		}
 		$in  = fopen( $chunk_path, 'rb' ); // phpcs:ignore WordPress.WP.AlternativeFunctions
 		$out = fopen( $job['path'], 'ab' ); // phpcs:ignore WordPress.WP.AlternativeFunctions
 		if ( ! $in || ! $out ) {
+			if ( $in ) {
+				fclose( $in ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+			}
+			if ( $out ) {
+				fclose( $out ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+			}
 			return new WP_Error( 'wp_chrono_import_io', 'Could not write the upload to storage.', array( 'status' => 500 ) );
 		}
-		stream_copy_to_stream( $in, $out );
+		$copied = stream_copy_to_stream( $in, $out );
 		fclose( $in ); // phpcs:ignore WordPress.WP.AlternativeFunctions
 		fclose( $out ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+		if ( false === $copied || (int) $copied !== (int) $chunk_bytes ) {
+			return new WP_Error( 'wp_chrono_import_io', 'The upload chunk could not be written completely.', array( 'status' => 507 ) );
+		}
 		clearstatcache( true, $job['path'] );
 		$job['bytes'] = (int) filesize( $job['path'] );
 		update_option( self::OPTION, $job, false );
@@ -96,6 +138,10 @@ final class LocalImport {
 	public function from_file( string $path ) {
 		if ( ! is_readable( $path ) ) {
 			return new WP_Error( 'wp_chrono_import_io', "Cannot read {$path}." );
+		}
+		$bytes = filesize( $path );
+		if ( false === $bytes || $bytes > self::max_import_bytes() ) {
+			return new WP_Error( 'wp_chrono_import_size', sprintf( 'This import exceeds the %s upload limit.', size_format( self::max_import_bytes() ) ), array( 'status' => 413 ) );
 		}
 		$job = $this->new_job( basename( $path ) );
 		if ( is_wp_error( $job ) ) {

@@ -283,7 +283,16 @@ final class LicenseService {
 
 	private static function clean_server( string $url ): string {
 		$url = esc_url_raw( trim( $url ), array( 'https', 'http' ) );
+		$parts = '' === $url ? array() : wp_parse_url( $url );
+		if ( '' !== $url && 'http' === strtolower( (string) ( $parts['scheme'] ?? '' ) ) && ! self::is_local_server( (string) ( $parts['host'] ?? '' ) ) ) {
+			return '';
+		}
 		return (string) $url;
+	}
+
+	private static function is_local_server( string $host ): bool {
+		$host = strtolower( trim( $host, '[]' ) );
+		return in_array( $host, array( 'localhost', '127.0.0.1', '::1' ), true );
 	}
 
 	/**

@@ -412,7 +412,8 @@ final class SafeUpdates {
 				continue;
 			}
 			$needle = ( 'theme' === $item['type'] ? 'themes/' : 'plugins/' ) . $item['slug'];
-			if ( false !== strpos( $file, $needle . '/' ) || str_ends_with( $file, $needle ) ) {
+			$ends_with = strlen( $needle ) <= strlen( $file ) && 0 === substr_compare( $file, $needle, -strlen( $needle ) );
+			if ( false !== strpos( $file, $needle . '/' ) || $ends_with ) {
 				return $item;
 			}
 		}

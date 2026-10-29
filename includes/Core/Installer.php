@@ -14,8 +14,13 @@ final class Installer {
 	const OPTION_DB_VERSION = 'wp_chrono_db_version';
 
 	public static function activate(): void {
-		self::install_schema();
-		Storage::ensure();
+		if ( ! self::install_schema() ) {
+			wp_die( esc_html__( 'WP Chrono could not create its database tables. Check the site database credentials and try activation again.', 'wp-chrono' ) );
+		}
+		$storage = Storage::ensure();
+		if ( is_wp_error( $storage ) ) {
+			wp_die( esc_html( $storage->get_error_message() ) );
+		}
 		// First activation only: show the welcome / safety checklist once.
 		if ( false === get_option( \WPChrono\API\OnboardingController::OPTION ) ) {
 			add_option( \WPChrono\API\OnboardingController::OPTION, array( 'welcome_seen' => false ), '', false );
@@ -31,10 +36,19 @@ final class Installer {
 		}
 	}
 
-	private static function install_schema(): void {
+	private static function install_schema(): bool {
+		global $wpdb;
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 		dbDelta( Schema::ddl() );
+		foreach ( Schema::internal_tables() as $table ) {
+			$like = $wpdb->esc_like( $table );
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.NotPrepared
+			if ( $table !== $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $like ) ) ) {
+				return false;
+			}
+		}
 		// autoload=false keeps our options out of the front-end alloptions payload.
 		update_option( self::OPTION_DB_VERSION, Schema::VERSION, false );
+		return true;
 	}
 }

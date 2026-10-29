@@ -146,8 +146,12 @@ final class CloudStorageService {
 			$next['provider'] = 'custom';
 		}
 		$next['endpoint'] = untrailingslashit( $next['endpoint'] );
-		if ( '' !== $next['endpoint'] && ( ! preg_match( '#^https?://[^/\s<>]+$#i', $next['endpoint'] ) || false === wp_parse_url( $next['endpoint'] ) ) ) {
+		$parts = '' === $next['endpoint'] ? array() : wp_parse_url( $next['endpoint'] );
+		if ( '' !== $next['endpoint'] && ( ! preg_match( '#^https?://[^/\s<>]+$#i', $next['endpoint'] ) || false === $parts ) ) {
 			return new WP_Error( 'wp_chrono_cloud_endpoint', 'The endpoint must be a URL like https://<account-id>.r2.cloudflarestorage.com (no path).', array( 'status' => 400 ) );
+		}
+		if ( '' !== $next['endpoint'] && 'http' === strtolower( (string) ( $parts['scheme'] ?? '' ) ) && ! self::is_local_endpoint( (string) ( $parts['host'] ?? '' ) ) ) {
+			return new WP_Error( 'wp_chrono_cloud_endpoint_https', 'Cloud storage endpoints must use HTTPS. HTTP is allowed only for localhost development.', array( 'status' => 400 ) );
 		}
 		if ( '' !== $next['bucket'] && ! preg_match( '/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/', $next['bucket'] ) ) {
 			return new WP_Error( 'wp_chrono_cloud_bucket', 'Bucket names are 3–63 characters: lowercase letters, numbers, dots and hyphens.', array( 'status' => 400 ) );
@@ -159,6 +163,11 @@ final class CloudStorageService {
 		$prefix         = trim( str_replace( '\\', '/', $next['prefix'] ), '/' );
 		$next['prefix'] = '' === $prefix ? '' : $prefix . '/';
 		return $next;
+	}
+
+	private static function is_local_endpoint( string $host ): bool {
+		$host = strtolower( trim( $host, '[]' ) );
+		return in_array( $host, array( 'localhost', '127.0.0.1', '::1' ), true );
 	}
 
 	// ---------------------------------------------------------------------

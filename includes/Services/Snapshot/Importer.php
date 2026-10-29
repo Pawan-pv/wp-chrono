@@ -70,9 +70,16 @@ final class Importer {
 		$in  = gzopen( $gz_path, 'rb' );
 		$out = fopen( $sql, 'wb' ); // phpcs:ignore WordPress.WP.AlternativeFunctions
 		if ( ! $in || ! $out ) {
+			if ( $in ) {
+				gzclose( $in );
+			}
+			if ( $out ) {
+				fclose( $out ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+			}
 			return $this->fail( $id, 'Could not decompress the downloaded dump.' );
 		}
-		$tail = '';
+		$tail  = '';
+		$bytes = 0;
 		while ( ! gzeof( $in ) ) {
 			$chunk = @gzread( $in, 1048576 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors
 			if ( false === $chunk ) {
@@ -81,7 +88,26 @@ final class Importer {
 				@unlink( $sql ); // phpcs:ignore
 				return $this->fail( $id, 'The .sql.gz file is corrupt (gzip data error).', 422 );
 			}
-			fwrite( $out, $chunk ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+			$bytes += strlen( $chunk );
+			if ( $bytes > LocalImport::max_decompressed_bytes_for_importer() ) {
+				gzclose( $in );
+				fclose( $out ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+				@unlink( $sql ); // phpcs:ignore
+				return $this->fail( $id, 'The decompressed dump exceeds the import size limit.', 413 );
+			}
+			$free = disk_free_space( dirname( $sql ) );
+			if ( false !== $free && $free < strlen( $chunk ) + LocalImport::FREE_SPACE_RESERVE ) {
+				gzclose( $in );
+				fclose( $out ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+				@unlink( $sql ); // phpcs:ignore
+				return $this->fail( $id, 'There is not enough free disk space to decompress this import.', 507 );
+			}
+			if ( strlen( $chunk ) !== fwrite( $out, $chunk ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions
+				gzclose( $in );
+				fclose( $out ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+				@unlink( $sql ); // phpcs:ignore
+				return $this->fail( $id, 'The decompressed dump could not be written completely.', 507 );
+			}
 			$tail = substr( $tail . $chunk, -256 );
 		}
 		gzclose( $in );
