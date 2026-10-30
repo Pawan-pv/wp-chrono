@@ -17,7 +17,7 @@
 set -euo pipefail
 MODE="${1:?pre|post}"
 PLUGIN=wp-chrono
-php_() { docker run --rm --pull=never -i -v "$PWD/$PLUGIN:/p:ro" -v "${RUNNER_TEMP:-/tmp}:/k" wp-chrono-dev:latest php "$@"; }
+php_() { docker run --rm --pull=never -i -e PUB -v "$PWD/$PLUGIN:/p:ro" -v "${RUNNER_TEMP:-/tmp}:/k" wp-chrono-dev:latest php "$@"; }
 fp() { echo "$1" | base64 -d | sha256sum | cut -c1-64; }
 
 mapfile -t PROD < <(grep -hoE "'[0-9]{4}-[0-9]{2}' => '[A-Za-z0-9+/]{43}='" \
