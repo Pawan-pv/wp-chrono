@@ -37,6 +37,16 @@ export interface StorageUsage {
   warn: boolean;
   reason: string | null;
   prunable: { count: number; bytes: number };
+  /** Storage cap (bytes). */
+  cap_bytes: number;
+  /** Max auto-snapshots to keep. */
+  cap_autos: number;
+  /** Total bytes above the cap. */
+  cap_used_bytes: boolean;
+  /** Auto-snapshot count above the cap. */
+  cap_used_autos: boolean;
+  /** Either cap is exceeded. */
+  over_cap: boolean;
 }
 
 export type ResetTarget =
@@ -197,6 +207,7 @@ export interface Snapshot {
   meta: {
     error?: string;
     last_restored_at?: string;
+    pinned?: boolean;
     exports?: { file: string; bytes: number; created_at: string; download_url?: string }[];
     rollback?: { files?: RollbackFile[]; skipped?: { type: string; slug: string; reason: string }[] };
     verified?: boolean;
@@ -245,6 +256,10 @@ export interface ChronoSettings {
   auto_snapshot: boolean;
   safe_updates: boolean;
   auto_retention: number;
+  /** Maximum total storage for snapshots, archives and exports, in GB. */
+  storage_cap_gb: number;
+  /** Maximum number of auto-snapshots to keep. */
+  storage_cap_autos: number;
   storage_warn_mb: number;
   rollback_max_mb: number;
   schedule: 'off' | 'daily' | 'weekly';

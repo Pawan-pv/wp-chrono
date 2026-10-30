@@ -200,6 +200,18 @@ final class SnapshotController extends RestController {
 			)
 		);
 		$this->route(
+			'/snapshots/(?P<id>\d+)/pin',
+			array(
+				array(
+					'methods'  => WP_REST_Server::CREATABLE,
+					'callback' => array( $this, 'pin' ),
+					'args'     => $id + array(
+						'pinned' => array( 'type' => 'boolean', 'default' => true ),
+					),
+				),
+			)
+		);
+		$this->route(
 			'/snapshots/orphans',
 			array(
 				array(
@@ -301,6 +313,18 @@ final class SnapshotController extends RestController {
 	public function prune_auto( WP_REST_Request $request ): \WP_REST_Response {
 		$deleted = $this->service->prune_auto( (int) $request['keep'] );
 		return $this->ok( array( 'deleted' => $deleted, 'storage' => ( new SiteInspector() )->storage_usage() ) );
+	}
+
+	public function pin( WP_REST_Request $request ): \WP_REST_Response|WP_Error {
+		$snapshot = $this->service->get( (int) $request['id'] );
+		if ( is_wp_error( $snapshot ) ) {
+			return $snapshot;
+		}
+		$result = $this->service->set_pinned( (int) $request['id'], (bool) $request['pinned'] );
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+		return $this->ok( array( 'id' => (int) $request['id'], 'pinned' => (bool) $request['pinned'] ) );
 	}
 
 	/**
@@ -414,6 +438,9 @@ final class SnapshotController extends RestController {
 		$settings = Settings::update( $changes );
 		if ( isset( $changes['auto_retention'] ) ) {
 			$this->service->prune_auto();
+		}
+		if ( isset( $changes['storage_cap_gb'] ) || isset( $changes['storage_cap_autos'] ) ) {
+			$this->service->enforce_storage_cap();
 		}
 		if ( isset( $changes['schedule_keep'] ) ) {
 			$this->service->prune_trigger( 'scheduled', $settings['schedule_keep'] );
