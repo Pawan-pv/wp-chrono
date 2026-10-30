@@ -10,9 +10,19 @@ on:
       - 'opencode.json'
       - '.gitattributes'
   workflow_dispatch:
+    inputs:
+      stack:
+        description: Stack (prod = nginx/FPM/OPcache + WP 7.1.3, dev = built-in server + WP 6.7.2)
+        type: choice
+        options: [prod, dev]
+        default: prod
+      suites:
+        description: Optional SUITES regex to run instead of the core set (e.g. ^safe-update-woo-checks)
+        type: string
+        default: ''
 
 concurrency:
-  group: quick-${{ github.ref }}
+  group: quick-${{ github.ref }}-${{ inputs.stack }}-${{ inputs.suites }}
   cancel-in-progress: true
 
 permissions:
@@ -23,9 +33,9 @@ jobs:
     uses: ./.github/workflows/suites.yml
     with:
       label: quick
-      stack: prod
+      stack: ${{ inputs.stack || 'prod' }}
       timeout: 25
       # Static: tsc, vite build, PHP 8.3 + 7.4 lint. Plugin Check runs inside release-checks.sh.
       # Core: Safe Updates, Rollback, WooCommerce, Undo over HTTP (REST + ERS), Release package.
       suites: >-
-        ^(TypeScript typecheck|Production build|PHP 8\.3 lint|PHP 7\.4 lint|rollback-checks|update-rollback-checks|safe-update-checks|safe-update-woo-checks|release-checks)
+        ${{ inputs.suites || '^(TypeScript typecheck|Production build|PHP 8\.3 lint|PHP 7\.4 lint|rollback-checks|update-rollback-checks|safe-update-checks|safe-update-woo-checks|release-checks)' }}

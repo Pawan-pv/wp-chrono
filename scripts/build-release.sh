@@ -45,7 +45,9 @@ cp -r wp-chrono.php uninstall.php readme.txt includes build languages "$DIST/"
 find "$DIST" -name '*.map' -delete
 
 echo "• zipping"
-MSYS_NO_PATHCONV=1 docker run --rm --pull=never -v "$WIN_ROOT:/w" -w /w wp-chrono-dev:latest php scripts/make-zip.php "$DIST" "$ZIP" wp-chrono
+# On Linux hosts (CI) the container would write the zip as root, unreadable here.
+AS_ME=(); [ "$(uname -s)" = Linux ] && AS_ME=(--user "$(id -u):$(id -g)")
+MSYS_NO_PATHCONV=1 docker run --rm --pull=never "${AS_ME[@]}" -v "$WIN_ROOT:/w" -w /w wp-chrono-dev:latest php scripts/make-zip.php "$DIST" "$ZIP" wp-chrono
 rm -rf "$DIST"
 
 SHA="$(sha256sum "$ZIP" | cut -d' ' -f1)"

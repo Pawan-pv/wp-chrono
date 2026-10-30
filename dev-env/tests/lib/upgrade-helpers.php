@@ -60,6 +60,7 @@ function wpc_plugin_php( string $slug, string $version, string $body = '' ): str
 function wpc_install_plugin( string $slug, string $version, string $body = '' ): string {
 	if ( '.php' === substr( $slug, -4 ) ) {
 		file_put_contents( WP_PLUGIN_DIR . '/' . $slug, wpc_plugin_php( basename( $slug, '.php' ), $version, $body ) );
+		wpc_backdate( WP_PLUGIN_DIR . '/' . $slug );
 		return $slug;
 	}
 	wp_mkdir_p( WP_PLUGIN_DIR . "/{$slug}" );
@@ -67,7 +68,24 @@ function wpc_install_plugin( string $slug, string $version, string $body = '' ):
 	file_put_contents( WP_PLUGIN_DIR . "/{$slug}/readme.txt", "=== {$slug} ===\nStable tag: {$version}\n" );
 	wp_mkdir_p( WP_PLUGIN_DIR . "/{$slug}/includes" );
 	file_put_contents( WP_PLUGIN_DIR . "/{$slug}/includes/version.txt", $version );
+	wpc_backdate( WP_PLUGIN_DIR . "/{$slug}/{$slug}.php", WP_PLUGIN_DIR . "/{$slug}/readme.txt", WP_PLUGIN_DIR . "/{$slug}/includes/version.txt" );
 	return "{$slug}/{$slug}.php";
+}
+
+/**
+ * Gives hand-installed files an mtime a few minutes old, a different one each
+ * call, as on a real site where the installed version predates the update.
+ * OPcache revalidates by whole-second mtime: an update (or reinstall) written
+ * in the same second as the cached copy would otherwise never be seen by
+ * PHP-FPM, and on a fast machine (CI) the probe judged the old code.
+ */
+function wpc_backdate( string ...$files ): void {
+	static $n = 0;
+	$t = time() - 600 + ( $n++ % 300 );
+	foreach ( $files as $f ) {
+		touch( $f, $t );
+	}
+	clearstatcache();
 }
 
 /**

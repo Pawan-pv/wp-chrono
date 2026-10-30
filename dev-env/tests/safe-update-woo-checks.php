@@ -309,7 +309,7 @@ wp_cache_flush();
 $su = wpc_trigger_result();
 wpc_check( 'dashboard (update.php): plugin deactivated for the update → check deferred, not run on a site without the new code', 'watching' === ( $su['status'] ?? '' ) && $addon === ( SafeUpdates::state()['pending']['plugin'] ?? '' ) && ! is_plugin_active( $addon ), ( $su['status'] ?? 'none' ) . ' / pending=' . wp_json_encode( SafeUpdates::state()['pending'] ) );
 $amp      = '(?:&amp;|&#038;|&)'; // esc_url() writes & as &#038;.
-$activate = preg_match( '#update\.php\?action=activate-plugin' . $amp . 'networkwide=' . $amp . 'plugin=wpc-shop-addon%2Fwpc-shop-addon\.php' . $amp . '_wpnonce=([0-9a-f]+)#', $body, $m ) ? $m[1] : '';
+$activate = preg_match( '~update\.php\?action=activate-plugin' . $amp . 'networkwide=' . $amp . 'plugin=wpc-shop-addon%2Fwpc-shop-addon\.php' . $amp . '_wpnonce=([0-9a-f]+)~', $body, $m ) ? $m[1] : ''; // Not '#': $amp contains '&#038;'.
 if ( '' === $activate ) {
 	echo '      update.php output: ' . substr( preg_replace( '/\s+/', ' ', wp_strip_all_tags( $body ) ), -300 ) . "\n";
 }
