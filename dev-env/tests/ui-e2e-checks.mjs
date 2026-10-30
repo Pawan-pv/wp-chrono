@@ -545,8 +545,23 @@ async function run() {
     el.select();
   });
   await page.type('300');
-  await page.click('Save settings', { scope: '[data-e2e="settings-dialog"]' });
-  await page.waitFor(() => /Settings saved/.test(document.querySelector('[data-e2e="settings-message"]')?.innerText ?? ''), [], 10000, 'settings saved');
+  await page.screenshot('25a-settings-open');
+  await page.eval(() => (window.__wpcBeforeSave = 1));
+  const saveBox = await page.click('Save settings', { scope: '[data-e2e="settings-dialog"]' });
+  await page.screenshot('25b-settings-after-click');
+  try {
+    await page.waitFor(() => /Settings saved/.test(document.querySelector('[data-e2e="settings-message"]')?.innerText ?? ''), [], 10000, 'settings saved');
+  } catch (e) {
+    // Explain the failure: reload, dialog closed, or an error message instead.
+    const state = await page.eval(() => ({
+      reloaded: !window.__wpcBeforeSave,
+      dialog: !!document.querySelector('[data-e2e="settings-dialog"]'),
+      message: document.querySelector('[data-e2e="settings-message"]')?.innerText ?? null,
+      tab: document.querySelector('[data-e2e="settings-dialog"] [role="tab"][aria-selected="true"]')?.innerText ?? null,
+      hash: location.hash,
+    }));
+    throw new Error(`${e.message} — ${JSON.stringify({ ...state, clickedAt: saveBox })}`);
+  }
   const saved = await page.eval(async () => (await (await fetch(`${window.wpChrono.restUrl}settings`, { headers: { 'X-WP-Nonce': window.wpChrono.restNonce, 'X-WP-Chrono-Nonce': window.wpChrono.chronoNonce } })).json()).rollback_max_mb);
   check('Settings tab saves the rollback archive size limit', saved === 300, `${saved} MB`);
   await page.key('Escape', 'Escape', 27);
