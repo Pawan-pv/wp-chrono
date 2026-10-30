@@ -1,0 +1,69 @@
+# Shared setup for every job that runs dev-env suites. Expects the plugin
+# checked out at wp-chrono/ and dev-env moved next to it (the suites use ../wp-chrono).
+name: Set up the WP Chrono test stack
+description: Node build, cached test downloads and Docker images, throwaway signing keys
+runs:
+  using: composite
+  steps:
+    - name: Refuse forbidden files (reference source, keys, secrets)
+      shell: bash
+      working-directory: wp-chrono
+      run: bash .github/ci/forbidden-files.sh
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Cache node_modules
+      id: node-modules
+      uses: actions/cache@v4
+      with:
+        path: wp-chrono/node_modules
+        key: node-modules-${{ runner.os }}-node20-${{ hashFiles('wp-chrono/package-lock.json') }}
+
+    - name: npm ci
+      if: steps.node-modules.outputs.cache-hit != 'true'
+      shell: bash
+      working-directory: wp-chrono
+      run: npm ci --no-audit --no-fund
+
+    - name: Build the admin app (build/ is not committed)
+      shell: bash
+      working-directory: wp-chrono
+      run: npm run --silent build
+
+    - name: Cache test downloads (WordPress, WooCommerce, Plugin Check, WP-CLI)
+      uses: actions/cache@v4
+      with:
+        path: dev-env/cache
+        key: dev-env-downloads-${{ hashFiles('wp-chrono/.github/ci/fetch-downloads.sh') }}
+
+    - name: Fetch + verify test downloads
+      shell: bash
+      run: bash wp-chrono/.github/ci/fetch-downloads.sh dev-env/cache
+
+    - name: Image cache key
+      id: images-key
+      shell: bash
+      run: echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+
+    - name: Cache Docker images
+      id: images
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/wpc-images
+        key: wpc-images-${{ hashFiles('wp-chrono/.github/ci/build-images.sh') }}-${{ steps.images-key.outputs.month }}
+
+    - name: Load cached images
+      if: steps.images.outputs.cache-hit == 'true'
+      shell: bash
+      run: zstd -dc ~/.cache/wpc-images/images.tar.zst | docker load
+
+    - name: Build images (cache miss)
+      if: steps.images.outputs.cache-hit != 'true'
+      shell: bash
+      run: bash wp-chrono/.github/ci/build-images.sh ~/.cache/wpc-images/images.tar.zst
+
+    - name: Throwaway Ed25519 test keys + production-key guard
+      shell: bash
+      run: bash wp-chrono/.github/ci/key-guard.sh pre

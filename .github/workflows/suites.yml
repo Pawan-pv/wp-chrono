@@ -1,0 +1,71 @@
+# Reusable: one job that runs a subset of dev-env/tests/autonomous-full-suite.sh
+# (SUITES regex) on a fresh offline stack. Called by quick.yml and full.yml.
+#   stack prod = nginx + PHP-FPM + OPcache, WordPress 7.1.3 (dev-env/prod/)
+#   stack dev  = PHP built-in server, WordPress 6.7.2 (dev-env/)
+name: suites
+
+on:
+  workflow_call:
+    inputs:
+      label:
+        type: string
+        required: true
+      suites:
+        description: Extended regex over the suite names (see autonomous-full-suite.sh)
+        type: string
+        required: true
+      stack:
+        type: string
+        default: prod
+      timeout:
+        type: number
+        default: 20
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    name: ${{ inputs.label }} (${{ inputs.stack }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.timeout }}
+    env:
+      COMPOSE_FILE: ${{ inputs.stack == 'dev' && 'docker-compose.yml' || 'prod/docker-compose.yml' }}
+      WP_TARBALL: ${{ inputs.stack == 'dev' && 'wordpress.tar.gz' || 'wordpress-7.1.3.tar.gz' }}
+      CHROME_PATH: /usr/bin/google-chrome
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: wp-chrono
+          persist-credentials: false
+
+      - name: Lay out plugin + dev-env side by side
+        run: mv wp-chrono/dev-env dev-env
+
+      - uses: ./wp-chrono/.github/actions/setup-stack
+
+      - name: Suites
+        id: suites
+        working-directory: dev-env
+        env:
+          SUITES: ${{ inputs.suites }}
+        run: bash tests/autonomous-full-suite.sh
+
+      - name: Production-key guard (what the suites trusted)
+        if: ${{ !cancelled() && steps.suites.outcome != 'skipped' }}
+        run: bash wp-chrono/.github/ci/key-guard.sh post
+
+      - name: Collect stack logs
+        if: failure()
+        run: bash wp-chrono/.github/ci/collect-logs.sh
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ inputs.label }}-${{ inputs.stack }}-${{ github.run_attempt }}
+          path: |
+            dev-env/tests/artifacts/
+            !dev-env/tests/artifacts/downloads/
+          retention-days: 7
+          if-no-files-found: ignore

@@ -1,0 +1,31 @@
+# Every push: static checks + the core suites, one job (~10 min) on the
+# production-like stack. The full suite runs in full.yml.
+name: quick
+
+on:
+  push:
+    branches: ['**']
+    paths-ignore:
+      - '**.md'
+      - 'opencode.json'
+      - '.gitattributes'
+  workflow_dispatch:
+
+concurrency:
+  group: quick-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    uses: ./.github/workflows/suites.yml
+    with:
+      label: quick
+      stack: prod
+      timeout: 25
+      # Static: tsc, vite build, PHP 8.3 + 7.4 lint. Plugin Check runs inside release-checks.sh.
+      # Core: Safe Updates, Rollback, WooCommerce, Undo over HTTP (REST + ERS), Release package.
+      suites: >-
+        ^(TypeScript typecheck|Production build|PHP 8\.3 lint|PHP 7\.4 lint|rollback-checks|update-rollback-checks|safe-update-checks|safe-update-woo-checks|release-checks)

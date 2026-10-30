@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Blocks commits that stage the reference source, keys or secrets.
+# Enable once per clone: git config core.hooksPath .githooks
+exec bash "$(git rev-parse --show-toplevel)/.github/ci/forbidden-files.sh" --staged

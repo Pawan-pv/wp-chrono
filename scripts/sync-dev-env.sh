@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copies the test environment (../dev-env, the copy you edit and run locally)
-# into this repo's dev-env/ so GitHub Actions (.github/workflows/tests.yml)
+# into this repo's dev-env/ so GitHub Actions (.github/workflows/quick.yml, full.yml, release.yml)
 # runs the same suites. Never shipped: the release zip is built from a
 # whitelist (scripts/build-release.sh) and dev-env is export-ignored.
 #

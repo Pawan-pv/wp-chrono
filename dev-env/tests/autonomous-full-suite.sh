@@ -4,14 +4,22 @@
 # WP_HTTP_BLOCK_EXTERNAL on, and the browser test drives an installed Chrome.
 #
 #   bash tests/autonomous-full-suite.sh
+#   SUITES='^(license-checks|rollback-checks)' bash tests/autonomous-full-suite.sh
+#
+# SUITES (extended regex, matched against the suite names printed in the
+# matrix) runs a subset in the usual order — CI splits the suite this way. The
+# fresh stack and the offline proof always run. Blueprints, cloud, the UI and
+# the CLI block need the test Pro license that license-checks.sh leaves active.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 ROOT="$(cd .. && pwd)"
 LOGDIR="tests/artifacts/logs"
 mkdir -p "$LOGDIR"
+SUITES="${SUITES:-}"
 
 declare -a NAMES RESULTS
 TOTAL_FAIL=0
+SELECTED=0
 
 record() { # name, logfile, exit-code, seconds
   local pass fail
@@ -26,6 +34,11 @@ record() { # name, logfile, exit-code, seconds
 
 run() { # name, command...
   local name="$1"; shift
+  case "$name" in
+    'Stack boots'*|'Outbound HTTP'*) ;;
+    *) if [ -n "$SUITES" ] && ! echo "$name" | grep -qE "$SUITES"; then return 0; fi
+       SELECTED=$((SELECTED + 1)) ;;
+  esac
   local log="$LOGDIR/$(echo "$name" | tr -c 'a-zA-Z0-9' '-').log"
   local start=$SECONDS
   "$@" >"$log" 2>&1
@@ -141,6 +154,10 @@ run 'CLI commands' sh -c '
 echo; echo "Release package"
 run 'release-checks.sh (zip → fresh install → audit)' bash tests/release-checks.sh --skip-build
 run 'update-checks.sh (signed self-update, mock API)' bash tests/update-checks.sh
+
+if [ -n "$SUITES" ] && [ "$SELECTED" -eq 0 ]; then
+  echo; echo "SUITES='$SUITES' matched no suite"; TOTAL_FAIL=$((TOTAL_FAIL + 1))
+fi
 
 echo
 echo "======================================"

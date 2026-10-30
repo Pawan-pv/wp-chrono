@@ -40,6 +40,26 @@ Back the secret key up offline; losing it means you can no longer issue keys for
 The optional license-server contract (activation / revocation, signed verdicts) is documented in
 `includes/Services/LicenseService.php`.
 
+## CI (GitHub Actions)
+
+The suites in `dev-env/` (a copy of `../dev-env`; refresh with `bash scripts/sync-dev-env.sh`)
+run on GitHub's Linux runners on an offline stack, as locally.
+
+| Workflow | When | What |
+|---|---|---|
+| `quick.yml` | every push to a branch (not `*.md`-only changes) | one job, prod stack: tsc + build, PHP 8.3/7.4 lint, Safe Updates, Rollback, WooCommerce, undo over REST + ERS, release package incl. Plugin Check |
+| `full.yml` | PRs to `master`/`main`, nightly 02:17 UTC (skipped if nothing was committed in 24 h), manual | all suites in 3 parallel groups (`updates`, `data`, `ui-release`) on the prod stack |
+| `release.yml` | pushing a `v*` tag | tag = plugin version = Stable tag, then the full suite on **both** stacks; the `release-gate` check is red if anything failed. Do not publish a tag with a red gate. CI never builds, signs or publishes. |
+
+Manual full run: GitHub → **Actions → full → Run workflow** (choose `prod`, `dev` or `both`), or
+`gh workflow run full.yml --ref <branch> -f stacks=both`.
+
+Failed jobs upload `dev-env/tests/artifacts/` plus container logs (7-day retention). CI generates a
+throwaway Ed25519 key pair per job and fails if a production public key (`LicenseService::PUBLIC_KEYS`,
+`Updater::RELEASE_KEYS`) is used by the tests; `~/.wp-chrono-keys` is never read.
+`.github/ci/forbidden-files.sh` fails CI if `reference-wp-reset/`, keys or secrets are tracked; enable the
+same check before each commit with `git config core.hooksPath .githooks`.
+
 ## Layout
 
 ```

@@ -6,3 +6,17 @@ dist/
 .DS_Store
 Thumbs.db
 *.secret
+
+# Never commit: competitor reference source, signing keys, secrets.
+# (Enforced by .github/ci/forbidden-files.sh in CI and the .githooks/pre-commit hook.)
+reference-wp-reset/
+.wp-chrono-keys/
+*.pem
+*.key
+*.p12
+id_rsa*
+id_ed25519*
+.dev-test-key.json
+.dev.vars*
+.env
+.env.*

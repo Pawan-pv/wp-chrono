@@ -1,0 +1,52 @@
+# Version tags (v*): the full suite on BOTH stacks. The "release gate" check
+# fails if anything failed — do not publish a tag whose gate is red.
+# CI never builds, signs or publishes the release: that stays on the vendor
+# machine (scripts/build-release.sh, cloud/scripts/publish-release.mjs).
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Tag matches the plugin version and readme Stable tag
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION="$(sed -n "s/^define( 'WP_CHRONO_VERSION', '\([^']*\)' );/\1/p" wp-chrono.php)"
+          HEADER="$(sed -n 's/^ \* Version: *//p' wp-chrono.php | tr -d '\r')"
+          STABLE="$(sed -n 's/^Stable tag: *//p' readme.txt | tr -d '\r')"
+          echo "tag $TAG  WP_CHRONO_VERSION $VERSION  header $HEADER  Stable tag $STABLE"
+          [ "$TAG" = "$VERSION" ] && [ "$TAG" = "$HEADER" ] && [ "$TAG" = "$STABLE" ]
+
+  full:
+    needs: version
+    uses: ./.github/workflows/full.yml
+    with:
+      stacks: both
+
+  release-gate:
+    needs: [version, full]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Block the release unless every job passed
+        run: |
+          echo "version: ${{ needs.version.result }}  full suite: ${{ needs.full.result }}"
+          [ "${{ needs.version.result }}" = success ] && [ "${{ needs.full.result }}" = success ] || {
+            echo "::error::Release ${{ github.ref_name }} is BLOCKED — do not publish it."; exit 1; }
+          echo "Release ${{ github.ref_name }} passed every suite on both stacks."
