@@ -174,7 +174,16 @@ class Page {
   }
   /** Real pointer click on the first visible element matching text (and optional CSS scope). */
   async click(text, { scope = 'body', selector = 'button, a, [role="tab"], [cmdk-item], label', hold = 0 } = {}) {
-    const box = await this.waitFor(findBox, [scope, selector, text], 20000, `"${text}"`);
+    let box = await this.waitFor(findBox, [scope, selector, text], 20000, `"${text}"`);
+    // Late-loading content can still move the target (a centred dialog grows when
+    // its second request answers). A click at stale coordinates lands outside and
+    // closes the dialog: click only once the box held still for two looks.
+    for (let i = 0, still = 0; i < 40 && still < 2; i++) {
+      await sleep(50);
+      const again = await this.waitFor(findBox, [scope, selector, text], 5000, `"${text}"`);
+      still = again.x === box.x && again.y === box.y ? still + 1 : 0;
+      box = again;
+    }
     await this.mouse(box.x, box.y, 'mouseMoved', { button: 'none' });
     await this.mouse(box.x, box.y, 'mousePressed');
     if (hold) await sleep(hold);
