@@ -72,6 +72,11 @@ function wpc_guest_trace( string $next ): void {
 	$new = array_diff( $now, $seen );
 	if ( $new ) {
 		echo '      [trace] new guest session(s) before "' . $next . '": ' . implode( ', ', $new ) . "\n";
+		$log = get_temp_dir() . 'wpc-guest-origin.log';
+		if ( is_readable( $log ) ) {
+			echo '      [trace] stored by: ' . str_replace( "\n", "\n                         ", trim( (string) file_get_contents( $log ) ) ) . "\n";
+			@unlink( $log ); // phpcs:ignore WordPress.PHP.NoSilencedErrors
+		}
 	}
 	$seen = $now;
 }

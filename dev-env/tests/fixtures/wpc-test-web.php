@@ -60,6 +60,20 @@ add_filter(
 	2
 );
 
+// Diagnostics: which request stored a WooCommerce guest session (read by
+// wpc_guest_trace() in safe-update-woo-checks.php).
+add_action(
+	'shutdown',
+	static function () {
+		if ( ! function_exists( 'WC' ) || ! WC()->session || is_user_logged_in() || ! WC()->session->has_session() ) {
+			return;
+		}
+		$line = gmdate( 'H:i:s' ) . ' ' . ( $_SERVER['REQUEST_METHOD'] ?? 'CLI' ) . ' ' . ( $_SERVER['REQUEST_URI'] ?? '' ) . ' customer=' . WC()->session->get_customer_id() . "\n";
+		file_put_contents( get_temp_dir() . 'wpc-guest-origin.log', $line, FILE_APPEND );
+	},
+	99
+);
+
 // Remote-management worker: updates a plugin from a FRONT-END request.
 if ( isset( $_GET['wpc_remote_update'], $_GET['plugin'] ) ) {
 	add_action(
