@@ -251,6 +251,8 @@ export interface ChronoSettings {
   schedule_keep: number;
   /** Deleting the plugin keeps snapshots, exports and settings. */
   keep_data_on_uninstall: boolean;
+  /** Extra pages of this site that Safe Updates checks after each update. */
+  safe_updates_urls: string[];
   /** Next scheduled snapshot (ISO, UTC); read-only. */
   schedule_next?: string | null;
 }

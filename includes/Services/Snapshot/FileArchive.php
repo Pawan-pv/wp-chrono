@@ -307,6 +307,7 @@ final class FileArchive {
 				continue;
 			}
 			self::rmtree( $item['old'] );
+			self::touch_tree( $target );
 			$restored++;
 			$log[] = sprintf(
 				'Reverted %s %s%s.',
@@ -673,6 +674,33 @@ final class FileArchive {
 		}
 		self::rmtree( $from );
 		return true;
+	}
+
+	/**
+	 * Stamps restored files with the current time. Extraction keeps the
+	 * archived modification time (rounded to 2 s by the zip format), and
+	 * OPcache only recompiles a file whose timestamp changed: should the old
+	 * and the replaced version share a timestamp, PHP-FPM would keep running
+	 * the replaced code indefinitely.
+	 */
+	private static function touch_tree( string $path ): void {
+		$now = time();
+		if ( is_link( $path ) ) {
+			return;
+		}
+		if ( is_file( $path ) ) {
+			@touch( $path, $now ); // phpcs:ignore WordPress.PHP.NoSilencedErrors, WordPress.WP.AlternativeFunctions.file_system_operations_touch -- same-filesystem timestamp refresh right after the atomic swap; WP_Filesystem may be FTP-based.
+			return;
+		}
+		if ( ! is_dir( $path ) ) {
+			return;
+		}
+		$items = new \RecursiveIteratorIterator( new \RecursiveDirectoryIterator( $path, \FilesystemIterator::SKIP_DOTS ) );
+		foreach ( $items as $item ) {
+			if ( $item->isFile() && ! $item->isLink() ) {
+				@touch( $item->getPathname(), $now ); // phpcs:ignore WordPress.PHP.NoSilencedErrors, WordPress.WP.AlternativeFunctions.file_system_operations_touch -- see above.
+			}
+		}
 	}
 
 	/**

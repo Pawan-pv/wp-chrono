@@ -1,0 +1,37 @@
+# Production-like variant of the dev stack: nginx + PHP-FPM + OPcache, PHP
+# running as an unprivileged user, pretty permalinks, stock nginx body limit
+# (1 MB), 256 MB memory and 30 s execution limits — what a typical VPS or
+# managed host looks like. Same service name, mounts and port as the dev
+# stack, so every suite in tests/ runs against it unchanged:
+#
+#   docker compose down -v                                  # stop the dev stack
+#   COMPOSE_FILE=prod/docker-compose.yml bash tests/autonomous-full-suite.sh
+#
+# Image: wp-chrono-prod:latest = wp-chrono-dev:latest + `apk add nginx php83-fpm
+# php83-opcache su-exec` (see README.md).
+name: wp-chrono-prod
+
+services:
+  wp:
+    image: wp-chrono-prod:latest
+    pull_policy: never
+    ports:
+      - "8088:80"
+    entrypoint: ["sh", "/start.sh"]
+    environment:
+      WP_TARBALL: ${WP_TARBALL:-wordpress.tar.gz}
+    volumes:
+      - html:/var/www/html
+      - db:/var/lib/mysql
+      - ../../wp-chrono:/var/www/html/wp-content/plugins/wp-chrono
+      - ../cache:/cache:ro
+      - ../tests:/tests:ro
+      - ./start.sh:/start.sh:ro
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -q -O /dev/null http://127.0.0.1/wp-login.php"]
+      interval: 5s
+      retries: 60
+
+volumes:
+  html: {}
+  db: {}

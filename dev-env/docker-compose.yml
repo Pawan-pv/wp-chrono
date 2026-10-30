@@ -1,0 +1,35 @@
+# Disposable WordPress stack for testing WP Chrono.
+#
+# Uses a locally built image (see README.md) because Docker Hub pulls are
+# unreliable on this network. One container runs MariaDB + PHP's built-in server.
+#
+#   docker compose up -d                       # http://localhost:8088  (chrono / chrono-pass)
+#   docker compose exec wp wp chrono status    # WP-CLI
+#   docker compose down -v                     # throw everything away
+name: wp-chrono-dev
+
+services:
+  wp:
+    image: wp-chrono-dev:latest
+    pull_policy: never
+    ports:
+      - "8088:80"
+    entrypoint: ["sh", "/start.sh"]
+    environment:
+      # WP_TARBALL=wordpress-7.1.3.tar.gz docker compose up -d  → test another release
+      WP_TARBALL: ${WP_TARBALL:-wordpress.tar.gz}
+    volumes:
+      - html:/var/www/html
+      - db:/var/lib/mysql
+      - ../wp-chrono:/var/www/html/wp-content/plugins/wp-chrono
+      - ./cache:/cache:ro
+      - ./tests:/tests:ro
+      - ./start.sh:/start.sh:ro
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -q -O /dev/null http://127.0.0.1/wp-login.php"]
+      interval: 5s
+      retries: 60
+
+volumes:
+  html: {}
+  db: {}

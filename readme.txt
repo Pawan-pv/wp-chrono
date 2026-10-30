@@ -108,7 +108,23 @@ Yes. Nginx ignores `.htaccess`, so WP Chrono stores everything in a `wp-content/
 
 The plugin / theme (or WordPress) files the update replaced, always. The database goes back to the snapshot taken just before the update only when nothing new arrived in the meantime: if a visitor placed an order, left a comment or registered (new posts, comments, users or WooCommerce orders since the snapshot), only the files are put back, so their data is never lost. The admin notice and email then say so, and you can still run a Full Undo yourself from the snapshot.
 
-A site only counts as broken when the failure repeats on three checks a few seconds apart; HTTP 503 (maintenance mode, overload) never counts.
+= Which pages does Safe Updates check? =
+
+The home page, wp-admin (when you update from the dashboard), and — when WooCommerce is active — the **cart, checkout and My Account** pages. Shop pages must still show their WooCommerce content (for example the checkout form), so an update that leaves checkout empty is caught even without a PHP error. Add more pages of your site under Settings → "Also check these pages after updates", or with the `wp_chrono_safe_updates_probe_targets` filter.
+
+The checks are anonymous visits with an empty cart: they never create carts, sessions or orders.
+
+A page only counts as broken when the failure repeats on three checks a few seconds apart; HTTP 503 (maintenance mode, overload), timeouts and slow pages never count.
+
+= Does a page cache or CDN fool the check? =
+
+No. Every check request carries a unique one-time query parameter plus `Cache-Control: no-cache, no-store` and `Pragma: no-cache`, and WordPress must print a matching one-time marker into the page it renders for that request. A copy served from any cache lacks that marker, so it is never counted as "working" — that page is reported as "Not checked" instead.
+
+Caches that ignore unknown query parameters (some CDN / host cache-key rules, nginx `fastcgi_cache` keyed on `$uri`, "ignore query string" settings) and caches that answer before WordPress starts (`advanced-cache.php` page caches, edge caches) cannot be bypassed: on such sites the affected pages are skipped, never undone by mistake. To have them checked, exclude requests carrying `wp_scrape_key` from caching.
+
+= What if my host blocks "loopback" requests? =
+
+Then WP Chrono can't load your pages, so nothing is ever undone automatically (updates are still snapshotted and can be undone by hand). WP Chrono shows an admin notice saying so; ask your host to allow loopback requests (Tools → Site Health reports the same problem).
 
 = What happens to my snapshots if I delete WP Chrono? =
 

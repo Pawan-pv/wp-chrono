@@ -3,3 +3,5 @@
 *.jpg binary
 *.zip binary
 *.mo binary
+dev-env export-ignore
+.github export-ignore

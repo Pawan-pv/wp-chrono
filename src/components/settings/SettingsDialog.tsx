@@ -37,11 +37,14 @@ export function SettingsDialog({ open, onOpenChange, tab, onTabChange }: Setting
   const [key, setKey] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  // Raw textarea text while editing (null = show the saved list).
+  const [urlsText, setUrlsText] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setMessage(null);
     setKey('');
+    setUrlsText(null);
     api<ChronoSettings>('settings').then(setSettings).catch(() => undefined);
     api<LicenseStatus>('license').then(setLicense).catch(() => undefined);
   }, [open]);
@@ -50,8 +53,12 @@ export function SettingsDialog({ open, onOpenChange, tab, onTabChange }: Setting
     if (!settings) return;
     setBusy('settings');
     try {
-      setSettings(await api<ChronoSettings>('settings', { method: 'POST', body: settings }));
-      setMessage({ ok: true, text: 'Settings saved.' });
+      const urls = urlsText === null ? settings.safe_updates_urls : urlsText.split(/\s+/).filter(Boolean);
+      const saved = await api<ChronoSettings>('settings', { method: 'POST', body: { ...settings, safe_updates_urls: urls } });
+      setSettings(saved);
+      setUrlsText(null);
+      const dropped = urls.length - saved.safe_updates_urls.length;
+      setMessage({ ok: true, text: dropped > 0 ? `Settings saved. ${dropped} URL(s) were skipped: only pages of this site are checked (max 10).` : 'Settings saved.' });
     } catch (e) {
       setMessage({ ok: false, text: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -143,6 +150,24 @@ export function SettingsDialog({ open, onOpenChange, tab, onTabChange }: Setting
                 onCheckedChange={(v) => setSettings((s) => (s ? { ...s, safe_updates: v } : s))}
                 aria-label="Safe Updates"
                 data-e2e="safe-updates-switch"
+              />
+            </label>
+            <label className="flex flex-col gap-1.5 text-sm">
+              <span className="flex flex-col">
+                Also check these pages after updates
+                <span className="text-xs text-muted-foreground">
+                  One URL of this site per line (max 10). WooCommerce cart, checkout and My Account are checked automatically.
+                </span>
+              </span>
+              <textarea
+                rows={3}
+                value={urlsText ?? settings?.safe_updates_urls.join('\n') ?? ''}
+                disabled={!settings?.auto_snapshot || !settings.safe_updates}
+                onChange={(e) => setUrlsText(e.target.value)}
+                placeholder={`${window.location.origin}/contact/`}
+                className="min-h-[4.5rem] w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+                aria-label="Extra pages to check after updates"
+                data-e2e="safe-updates-urls"
               />
             </label>
             <label className="flex items-center justify-between gap-4 text-sm">
