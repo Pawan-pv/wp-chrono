@@ -56,7 +56,10 @@ jobs:
         stack: ${{ fromJSON(inputs.stacks == 'both' && '["prod","dev"]' || format('["{0}"]', inputs.stacks || 'prod')) }}
         group: [updates, data, ui-release]
         include:
+          # WordPress 6.7.2 here: core-update-checks needs an older site to run a
+          # real upgrade to 7.1.3. quick.yml runs the same Safe Updates suites on 7.1.3.
           - group: updates
+            wp: wordpress.tar.gz
             suites: ^(license-checks|upgrader-checks|rollback-checks|update-rollback-checks|safe-update-checks|safe-update-woo-checks|core-update-checks|scheduled-checks)
           - group: data
             suites: ^(license-checks|rest-checks|http-checks|snapshot-checks|stress-checks|safety-checks|multisite-checks|blueprint-checks|cloud-checks|import-checks|import-validation-checks|recovery-checks)
@@ -67,4 +70,5 @@ jobs:
       label: ${{ matrix.group }}
       suites: ${{ matrix.suites }}
       stack: ${{ matrix.stack }}
+      wp: ${{ matrix.wp || '' }}
       timeout: 25

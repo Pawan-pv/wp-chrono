@@ -10,16 +10,18 @@ runs:
       working-directory: wp-chrono
       run: bash .github/ci/forbidden-files.sh
 
+    # Node 22+: ui-e2e-checks.mjs drives Chrome with Node's built-in WebSocket.
+    # 24 = what the suites are run with locally.
     - uses: actions/setup-node@v4
       with:
-        node-version: 20
+        node-version: 24
 
     - name: Cache node_modules
       id: node-modules
       uses: actions/cache@v4
       with:
         path: wp-chrono/node_modules
-        key: node-modules-${{ runner.os }}-node20-${{ hashFiles('wp-chrono/package-lock.json') }}
+        key: node-modules-${{ runner.os }}-node24-${{ hashFiles('wp-chrono/package-lock.json') }}
 
     - name: npm ci
       if: steps.node-modules.outputs.cache-hit != 'true'
