@@ -134,7 +134,7 @@ export function SettingsDialog({ open, onOpenChange, tab, onTabChange }: Setting
               <span className="flex flex-col">
                 <span className="text-sm font-medium">Safe Updates</span>
                 <span className="text-xs text-muted-foreground">
-                  After each update, check that the site still loads. If it broke, undo the update (files + database) automatically and email you.
+                  After each update, check that the site still loads. If it broke, undo the update automatically and email you. The database is only rolled back when no new orders, comments or users arrived in the meantime.
                 </span>
               </span>
               <Switch
@@ -209,6 +209,21 @@ export function SettingsDialog({ open, onOpenChange, tab, onTabChange }: Setting
               </div>
               <span className="text-xs text-muted-foreground">Site time zone. Runs through WP-Cron, so it starts with the first visit after that hour.</span>
             </div>
+            <label className="flex cursor-pointer items-center justify-between gap-4 rounded-lg border p-3">
+              <span className="flex flex-col">
+                <span className="text-sm font-medium">Keep snapshots if WP Chrono is deleted</span>
+                <span className="text-xs text-muted-foreground">
+                  Off: deleting the plugin also deletes every snapshot, export and setting. On: they stay, so a reinstall picks them up again.
+                </span>
+              </span>
+              <Switch
+                checked={settings?.keep_data_on_uninstall ?? false}
+                disabled={!settings}
+                onCheckedChange={(v) => setSettings((s) => (s ? { ...s, keep_data_on_uninstall: v } : s))}
+                aria-label="Keep snapshots if WP Chrono is deleted"
+                data-e2e="keep-data-switch"
+              />
+            </label>
             <div className="flex justify-end">
               <Button type="submit" size="sm" disabled={!settings || busy === 'settings'}>
                 {busy === 'settings' ? <Loader2 className="animate-spin" /> : <Save />}

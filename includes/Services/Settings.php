@@ -22,12 +22,13 @@ final class Settings {
 		'schedule'        => 'off',
 		'schedule_hour'   => 3,
 		'schedule_keep'   => 3,
+		'keep_data_on_uninstall' => false,
 	);
 
 	const SCHEDULES = array( 'off', 'daily', 'weekly' );
 
 	/**
-	 * @return array{auto_snapshot:bool,safe_updates:bool,auto_retention:int,storage_warn_mb:int,rollback_max_mb:int,schedule:string,schedule_hour:int,schedule_keep:int}
+	 * @return array{auto_snapshot:bool,safe_updates:bool,auto_retention:int,storage_warn_mb:int,rollback_max_mb:int,schedule:string,schedule_hour:int,schedule_keep:int,keep_data_on_uninstall:bool}
 	 */
 	public static function get(): array {
 		$stored = get_option( self::OPTION, array() );
@@ -41,12 +42,14 @@ final class Settings {
 			'schedule'        => in_array( $merged['schedule'], self::SCHEDULES, true ) ? (string) $merged['schedule'] : 'off',
 			'schedule_hour'   => max( 0, min( 23, (int) $merged['schedule_hour'] ) ),
 			'schedule_keep'   => max( 1, min( 50, (int) $merged['schedule_keep'] ) ),
+			// Deleting the plugin then keeps snapshots, exports and settings.
+			'keep_data_on_uninstall' => (bool) $merged['keep_data_on_uninstall'],
 		);
 	}
 
 	/**
 	 * @param array<string,mixed> $changes
-	 * @return array{auto_snapshot:bool,safe_updates:bool,auto_retention:int,storage_warn_mb:int,rollback_max_mb:int,schedule:string,schedule_hour:int,schedule_keep:int}
+	 * @return array{auto_snapshot:bool,safe_updates:bool,auto_retention:int,storage_warn_mb:int,rollback_max_mb:int,schedule:string,schedule_hour:int,schedule_keep:int,keep_data_on_uninstall:bool}
 	 */
 	public static function update( array $changes ): array {
 		$before = self::get();

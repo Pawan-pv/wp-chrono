@@ -219,8 +219,10 @@ final class DiffService {
 		);
 
 		if ( 'active_plugins' === $name ) {
-			$was   = (array) maybe_unserialize( (string) $old );
-			$is    = (array) maybe_unserialize( (string) $new );
+			// Snapshot values may come from an uploaded dump or a cloud pull:
+			// never instantiate objects from them.
+			$was   = array_filter( (array) self::plain_unserialize( (string) $old ), 'is_string' );
+			$is    = array_filter( (array) self::plain_unserialize( (string) $new ), 'is_string' );
 			$parts = array();
 			foreach ( array_diff( $is, $was ) as $plugin ) {
 				$parts[] = '+' . $plugin;
@@ -234,6 +236,16 @@ final class DiffService {
 		}
 
 		return $entry;
+	}
+
+	/**
+	 * unserialize() that never creates objects (they become
+	 * __PHP_Incomplete_Class), so crafted data can't trigger gadget chains.
+	 *
+	 * @return mixed
+	 */
+	private static function plain_unserialize( string $raw ) {
+		return is_serialized( $raw ) ? @unserialize( trim( $raw ), array( 'allowed_classes' => false ) ) : $raw; // phpcs:ignore WordPress.PHP.NoSilencedErrors, WordPress.PHP.DiscouragedPHPFunctions
 	}
 
 	/**

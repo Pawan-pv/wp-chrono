@@ -211,6 +211,10 @@ export interface SafeUpdateCheck {
   checked_at?: string;
   error?: { message: string; file: string; line: number } | null;
   culprit?: { type: string; slug: string; name: string; old_version: string; new_version: string | null } | null;
+  /** How the broken update was undone: 'files' when new visitor data blocked a database rollback. */
+  mode?: 'full' | 'files';
+  /** New records found since the snapshot, by label. */
+  fresh?: Record<string, number>;
 }
 
 /** A plugin / theme folder archived before an update (Services/Snapshot/FileArchive.php). */
@@ -245,6 +249,8 @@ export interface ChronoSettings {
   /** 0–23, in the site's timezone. */
   schedule_hour: number;
   schedule_keep: number;
+  /** Deleting the plugin keeps snapshots, exports and settings. */
+  keep_data_on_uninstall: boolean;
   /** Next scheduled snapshot (ISO, UTC); read-only. */
   schedule_next?: string | null;
 }

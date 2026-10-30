@@ -492,21 +492,22 @@ final class SnapshotService {
 	 *
 	 * @return array<string,mixed>|WP_Error
 	 */
-	public function restore( int $id, bool $drop_extra = false, string $mode = 'db', bool $include_network = false ) {
+	public function restore( int $id, bool $drop_extra = false, string $mode = 'db', bool $include_network = false, bool $takeover = false ) {
 		if ( 'files' === $mode ) {
 			return $this->undo_files( $id );
 		}
-		return ( new Restorer( $this ) )->start( $id, $drop_extra, 'full' === $mode, $include_network );
+		return ( new Restorer( $this ) )->start( $id, $drop_extra, 'full' === $mode, $include_network, $takeover );
 	}
 
 	/**
 	 * "Undo update": the database snapshot taken before an update plus the
 	 * plugin / theme files it replaced. Runs to completion (WP-CLI).
+	 * $takeover: cancel a restore job left idle by someone else (Safe Updates).
 	 *
 	 * @return array<string,mixed>|WP_Error Final restore result.
 	 */
-	public function undo_update( int $id, string $mode = 'full', bool $drop_extra = false, bool $include_network = false ) {
-		$tick = $this->restore( $id, $drop_extra, $mode, $include_network );
+	public function undo_update( int $id, string $mode = 'full', bool $drop_extra = false, bool $include_network = false, bool $takeover = false ) {
+		$tick = $this->restore( $id, $drop_extra, $mode, $include_network, $takeover );
 		while ( ! is_wp_error( $tick ) && empty( $tick['done'] ) ) {
 			$tick = $this->restore_tick( (string) $tick['job'], INF );
 		}
@@ -534,7 +535,12 @@ final class SnapshotService {
 		if ( is_wp_error( $staged ) ) {
 			return $staged;
 		}
-		$result = FileArchive::commit( $staged );
+		// Same window as a Full Undo: no request runs half-swapped code, and
+		// from WP-CLI / cron we stay offline until PHP-FPM's OPcache has
+		// dropped the replaced files.
+		$offline = FileArchive::maintenance_on();
+		$result  = FileArchive::commit( $staged );
+		FileArchive::maintenance_off( $offline, $result['restored'] > 0 && empty( $result['opcache_cleared'] ) );
 		$this->update_meta( $id, array( 'last_restored_at' => gmdate( 'c' ) ) );
 
 		return array(

@@ -790,7 +790,12 @@ final class BlueprintService {
 		if ( 'plugin' === $type && ( false !== strpos( $file, '..' ) || ! preg_match( '#^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?\.php$#', $file ) ) ) {
 			return new WP_Error( 'wp_chrono_blueprint_invalid', "Invalid plugin file for {$slug}.", array( 'status' => 400 ) );
 		}
-		$url = esc_url_raw( (string) ( $raw['url'] ?? '' ), array( 'https', 'http' ) );
+		// HTTPS only: a package fetched over plain HTTP could be swapped in transit.
+		$raw_url = trim( (string) ( $raw['url'] ?? '' ) );
+		$url     = esc_url_raw( $raw_url, array( 'https' ) );
+		if ( '' !== $raw_url && '' === $url ) {
+			return new WP_Error( 'wp_chrono_blueprint_invalid', "The package URL for {$slug} must use https://.", array( 'status' => 400 ) );
+		}
 		return array(
 			'type'    => $type,
 			'slug'    => $slug,

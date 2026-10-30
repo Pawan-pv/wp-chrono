@@ -20,7 +20,11 @@
  *
  * Never acts on uncertainty: if the baseline already failed or a probe gets
  * no answer (loopback blocked, timeout), the result is "unverified" and
- * nothing is undone. State lives in the snapshot meta (WP Chrono's own
+ * nothing is undone. A failure must repeat on every confirmation probe, and
+ * HTTP 503 (maintenance / overload) never counts. When visitors created
+ * records since the snapshot (orders, comments, users…), only the files are
+ * put back so their data is never lost; the admin is told and can still run
+ * a Full Undo by hand. State lives in the snapshot meta (WP Chrono's own
  * tables survive the database restore); the notice and the auto-update block
  * are written after the restore.
  *
@@ -91,6 +95,23 @@ final class SafeUpdates {
 	 * @return array{ok:?bool,status:int,error:?array<string,mixed>,reason:string}
 	 */
 	private static function probe_url( string $url, array $cookies ): array {
+		$result = self::probe_once( $url, $cookies );
+		if ( 503 === $result['status'] && null !== self::maintenance_timestamp() ) {
+			// The web server's OPcache can still hold an older `.maintenance`
+			// (another timestamp, e.g. from the previous update's or undo's
+			// maintenance window), so our bypass key was refused. Wait until
+			// OPcache re-reads the file, then try once more.
+			sleep( min( 10, max( 0, (int) ini_get( 'opcache.revalidate_freq' ) ) + 1 ) );
+			$result = self::probe_once( $url, $cookies );
+		}
+		return $result;
+	}
+
+	/**
+	 * @param array<string,string> $cookies
+	 * @return array{ok:?bool,status:int,error:?array<string,mixed>,reason:string}
+	 */
+	private static function probe_once( string $url, array $cookies ): array {
 		// While `.maintenance` exists (bulk / multisite updates), only a key
 		// derived from its timestamp gets past the maintenance page.
 		$upgrading = self::maintenance_timestamp();
@@ -147,6 +168,11 @@ final class SafeUpdates {
 				'line'    => (int) ( $result['line'] ?? 0 ),
 			);
 			return array( 'ok' => false, 'status' => $status, 'error' => $error, 'reason' => 'PHP fatal error' );
+		}
+		if ( 503 === $status ) {
+			// Maintenance mode / overload (often a plugin migrating its tables
+			// right after an update): not proof of a broken update.
+			return array( 'ok' => null, 'status' => $status, 'error' => null, 'reason' => 'HTTP 503 (maintenance or overload)' );
 		}
 		if ( $status >= 500 ) {
 			return array( 'ok' => false, 'status' => $status, 'error' => null, 'reason' => "HTTP $status" );
@@ -289,17 +315,43 @@ final class SafeUpdates {
 		}
 
 		/**
-		 * Seconds to wait before probing, so PHP-FPM workers see the new code
-		 * (core's auto-updater waits 2 s for the same reason).
+		 * Seconds to wait before probing, so PHP-FPM workers see the new code:
+		 * one OPcache revalidation interval plus a second (at least 2 s, what
+		 * core's auto-updater waits). Exactly revalidate_freq can still hit the
+		 * old cached file.
 		 *
 		 * @param int $seconds
 		 */
-		$delay = (int) apply_filters( 'wp_chrono_safe_updates_delay', 2 );
+		$opcache = filter_var( ini_get( 'opcache.enable' ), FILTER_VALIDATE_BOOLEAN ) || 'cli' === PHP_SAPI;
+		$delay   = (int) apply_filters( 'wp_chrono_safe_updates_delay', max( 2, $opcache ? (int) ini_get( 'opcache.revalidate_freq' ) + 1 : 2 ) );
 		if ( $delay > 0 ) {
 			sleep( min( 10, $delay ) );
 		}
 		$after  = self::probe();
 		$broken = $core_rollbacks ? 'WordPress rolled back ' . implode( ', ', $core_rollbacks ) . ' after a fatal error' : self::regression( $baseline, $after );
+
+		// A single failed request is not enough: proxies, cold caches and
+		// workers busy with the update all produce one-off 5xx. The failure
+		// must repeat on every confirmation probe before anything is undone.
+		/**
+		 * Extra probes that must fail too before an update is undone.
+		 *
+		 * @param int $retries Default 2 (three failing probes in total).
+		 */
+		$retries = $core_rollbacks ? 0 : max( 0, min( 5, (int) apply_filters( 'wp_chrono_safe_updates_retries', 2 ) ) );
+		for ( $try = 0; null !== $broken && $try < $retries; $try++ ) {
+			/**
+			 * Seconds between confirmation probes.
+			 *
+			 * @param int $seconds
+			 */
+			$pause = (int) apply_filters( 'wp_chrono_safe_updates_retry_delay', 3 );
+			if ( $pause > 0 ) {
+				sleep( min( 15, $pause ) );
+			}
+			$after  = self::probe();
+			$broken = self::regression( $baseline, $after ); // Recovered or no answer: nothing is undone.
+		}
 
 		if ( null === $broken ) {
 			$verified = true === $after['front']['ok'];
@@ -318,7 +370,19 @@ final class SafeUpdates {
 		$what    = $culprit ? sprintf( '%s %s', $culprit['name'] ?: $culprit['slug'], $culprit['new_version'] ?? '' ) : self::summary( $items );
 		$error   = $after['front']['error'] ?? $after['admin']['error'] ?? null;
 
-		$undo = $service->undo_update( $snapshot_id, 'full' );
+		// Never throw away what visitors created since the snapshot (orders,
+		// comments, sign-ups…): then only the code is put back.
+		$fresh = self::new_records( $snapshot_id );
+		/**
+		 * Undo mode Safe Updates uses: 'full' (files + database) or 'files'.
+		 *
+		 * @param string            $mode        'files' when new records were found, else 'full'.
+		 * @param array<string,int> $fresh       New records since the snapshot, by label.
+		 * @param int               $snapshot_id
+		 */
+		$mode = 'files' === apply_filters( 'wp_chrono_safe_updates_undo_mode', $fresh ? 'files' : 'full', $fresh, $snapshot_id ) ? 'files' : 'full';
+
+		$undo = $service->undo_update( $snapshot_id, $mode, false, false, true );
 		delete_transient( SnapshotService::AUTO_LOCK ); // The restored options may hold a stale lock.
 		$ok      = ! is_wp_error( $undo );
 		$recheck = $ok ? self::probe() : null;
@@ -332,16 +396,69 @@ final class SafeUpdates {
 			'after'    => $after,
 			'recheck'  => $recheck,
 			'undo'     => $ok ? array( 'tables' => (int) ( $undo['tables_restored'] ?? 0 ), 'files' => (int) ( $undo['files_restored'] ?? 0 ) ) : $undo->get_error_message(),
+			'mode'     => $mode,
+			'fresh'    => $fresh,
 			'snapshot' => $snapshot_id,
 		);
+		$kept = array();
+		foreach ( $fresh as $label => $count ) {
+			$kept[] = sprintf( '%d %s', $count, $label );
+		}
 		$outcome['message'] = $ok
-			? sprintf( 'WP Chrono Safe Updates: the update to %s broke the site (%s), so it was undone automatically — files and database are back to the state from just before the update.', $what, self::describe( $broken, $error ) )
+			? ( 'full' === $mode
+				? sprintf( 'WP Chrono Safe Updates: the update to %s broke the site (%s), so it was undone automatically — files and database are back to the state from just before the update.', $what, self::describe( $broken, $error ) )
+				: sprintf( 'WP Chrono Safe Updates: the update to %s broke the site (%s), so its files were put back automatically. The database was NOT rolled back because %s arrived after the update started and a rollback would delete them. If the site still misbehaves (the update may also have changed the database), use "Undo update" on snapshot #%d; that removes those new records.', $what, self::describe( $broken, $error ), implode( ', ', $kept ), $snapshot_id ) )
 			: sprintf( 'WP Chrono Safe Updates: the update to %s broke the site (%s) and the automatic undo FAILED: %s. Use "Undo update" on snapshot #%d or the Emergency Recovery Script.', $what, self::describe( $broken, $error ), $undo->get_error_message(), $snapshot_id );
 
 		self::record( $snapshot_id, $state, $outcome );
 		self::remember( $outcome );
 		self::email( $outcome );
 		return $outcome;
+	}
+
+	/**
+	 * Records created on the live site after the snapshot, in the tables where
+	 * visitors' data lives. Rows above the snapshot's highest ID count; edits
+	 * are not detected (the window between snapshot and check is short).
+	 *
+	 * @return array<string,int> Label => count, non-zero entries only.
+	 */
+	public static function new_records( int $snapshot_id ): array {
+		global $wpdb;
+		$watch = array(
+			'posts'     => array( 'new post(s), page(s) or order(s)', "post_type NOT IN ('revision','nav_menu_item','customize_changeset','oembed_cache','wp_global_styles','user_request','scheduled-action') AND post_status NOT IN ('auto-draft','inherit','trash')" ),
+			'comments'  => array( 'new comment(s) or order note(s)', "comment_type <> 'action_log'" ),
+			'users'     => array( 'new user account(s)', '' ),
+			'wc_orders' => array( 'new WooCommerce order(s)', '' ),
+		);
+		/**
+		 * Tables whose new rows block an automatic database rollback. Keys are
+		 * table names without the prefix; values are [label, extra SQL condition].
+		 *
+		 * @param array<string,array{0:string,1:string}> $watch
+		 */
+		$watch  = (array) apply_filters( 'wp_chrono_safe_updates_watch_tables', $watch );
+		$tables = ( new SnapshotService() )->tables( $snapshot_id );
+		$found  = array();
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		foreach ( $watch as $suffix => $spec ) {
+			$live = ( 'users' === $suffix ? $wpdb->base_prefix : $wpdb->prefix ) . $suffix;
+			if ( ! isset( $tables[ $live ] ) || ! is_array( $spec ) ) {
+				continue;
+			}
+			$pk = $wpdb->get_col( $wpdb->prepare( 'SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_KEY = %s AND EXTRA LIKE %s', $wpdb->dbname, $live, 'PRI', '%auto_increment%' ) );
+			if ( 1 !== count( $pk ) ) {
+				continue;
+			}
+			$max   = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COALESCE(MAX(%i),0) FROM %i', (string) $pk[0], (string) $tables[ $live ]['snapshot_table'] ) );
+			$extra = '' !== (string) ( $spec[1] ?? '' ) ? ' AND (' . $spec[1] . ')' : ''; // Fixed SQL from code (filter), never user input.
+			$count = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i WHERE %i > %d' . $extra, $live, (string) $pk[0], $max ) );
+			if ( $count > 0 ) {
+				$found[ (string) $spec[0] ] = ( $found[ (string) $spec[0] ] ?? 0 ) + $count;
+			}
+		}
+		// phpcs:enable
+		return $found;
 	}
 
 	/**

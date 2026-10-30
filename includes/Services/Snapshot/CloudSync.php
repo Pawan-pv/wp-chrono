@@ -208,7 +208,37 @@ final class CloudSync {
 			),
 			'db'             => array( 'key' => $files[0]['key'], 'sha256' => $files[0]['sha256'], 'bytes' => $files[0]['bytes'] ),
 			'rollback'       => $rollback,
+			'rollback_mac'   => self::rollback_mac( $rollback ),
 		);
+	}
+
+	/**
+	 * HMAC over the plugin / theme / core archives of a manifest, keyed from
+	 * this site's wp-config salts (never stored in the database, so never in a
+	 * pushed dump). The bucket is not trusted: whoever can write to it controls
+	 * the manifest and every checksum in it. Code archives are only pulled back
+	 * when this site signed them; a pull from another site (or after the salts
+	 * changed) brings the database only.
+	 *
+	 * @param array<int,array<string,mixed>> $rollback
+	 */
+	private static function rollback_mac( array $rollback ): string {
+		$lines = array();
+		foreach ( $rollback as $entry ) {
+			$lines[] = implode(
+				'|',
+				array(
+					(string) ( $entry['type'] ?? '' ),
+					(string) ( $entry['slug'] ?? '' ),
+					(string) ( $entry['file'] ?? '' ),
+					empty( $entry['single'] ) ? '0' : '1',
+					basename( (string) ( $entry['zip'] ?? '' ) ),
+					(string) ( $entry['sha256'] ?? '' ),
+					(string) ( $entry['key'] ?? '' ),
+				)
+			);
+		}
+		return hash_hmac( 'sha256', "WPCF1\n" . implode( "\n", $lines ), hash( 'sha256', wp_salt( 'secure_auth' ) . '|wp-chrono-cloud-files|v1', true ) );
 	}
 
 	/**
@@ -370,8 +400,17 @@ final class CloudSync {
 				'sha256' => (string) $manifest['db']['sha256'],
 			),
 		);
-		foreach ( (array) ( $manifest['rollback'] ?? array() ) as $entry ) {
+		$rollback = array_values( array_filter( (array) ( $manifest['rollback'] ?? array() ), 'is_array' ) );
+		$signed   = $rollback && hash_equals( self::rollback_mac( $rollback ), (string) ( $manifest['rollback_mac'] ?? '' ) );
+		$manifest['rollback_skipped'] = ( $rollback && ! $signed ) ? count( $rollback ) : 0;
+		foreach ( $signed ? $rollback : array() as $entry ) {
 			if ( empty( $entry['key'] ) || 0 !== strpos( (string) $entry['key'], $key ) ) {
+				continue;
+			}
+			// Paths are rebuilt for this site; the manifest's own are never used.
+			$entry = FileArchive::localize_entry( $entry );
+			if ( null === $entry ) {
+				$manifest['rollback_skipped']++;
 				continue;
 			}
 			$files[] = array(
@@ -436,7 +475,10 @@ final class CloudSync {
 				number_format_i18n( $snapshot['row_count'] ),
 				$rollback ? sprintf( ', %d plugin/theme archive(s)', count( $rollback ) ) : '',
 				! empty( $snapshot['meta']['verified'] ) ? ', verified' : ', VERIFICATION FAILED'
-			),
+			) . ( empty( $job['manifest']['rollback_skipped'] ) ? '' : sprintf(
+				' %d plugin/theme/core archive(s) were NOT pulled: they were not signed by this site (pushed from another site, or the security salts in wp-config.php changed), so only the database can be restored from this backup.',
+				(int) $job['manifest']['rollback_skipped']
+			) ),
 		);
 	}
 

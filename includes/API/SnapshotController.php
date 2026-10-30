@@ -240,6 +240,7 @@ final class SnapshotController extends RestController {
 						'schedule'        => array( 'type' => 'string', 'enum' => Settings::SCHEDULES ),
 						'schedule_hour'   => array( 'type' => 'integer', 'minimum' => 0, 'maximum' => 23 ),
 						'schedule_keep'   => array( 'type' => 'integer', 'minimum' => 1, 'maximum' => 50 ),
+						'keep_data_on_uninstall' => array( 'type' => 'boolean' ),
 					),
 				),
 			)

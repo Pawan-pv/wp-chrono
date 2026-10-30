@@ -207,6 +207,10 @@ final class Importer {
 			if ( ! Database::belongs_to_site( $orig ) ) {
 				return new WP_Error( 'wp_chrono_import_prefix', sprintf( 'The dump contains table %s, which does not belong to this site (prefix %s).', $orig, $wpdb->prefix ), array( 'status' => 422 ) );
 			}
+			$refused = self::refuse_create( $sql );
+			if ( null !== $refused ) {
+				return new WP_Error( 'wp_chrono_import_statement', sprintf( "The dump's CREATE TABLE for %s was refused: %s", $orig, $refused ), array( 'status' => 422 ) );
+			}
 			$copy = Schema::snapshot_table_name( (string) $id, $orig );
 			// Foreign keys and the table comment are restored from the manifest instead.
 			$fks  = array();
@@ -227,7 +231,7 @@ final class Importer {
 			}
 			// Manifest (cloud) wins; an uploaded file carries the comment in its CREATE.
 			$known = $state['known'][ $orig ] ?? array( 'comment' => $orig_comment, 'fks' => array() );
-			$fks   = $known['fks'] ? $known['fks'] : $fks;
+			$fks   = array_values( array_filter( $known['fks'] ? $known['fks'] : $fks, array( self::class, 'is_safe_fk' ) ) );
 			TableCopier::set_comment( $copy, SnapshotService::table_tag( $id, $orig, $fks ) );
 			$create = TableCopier::normalized_create( $copy );
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
@@ -255,6 +259,9 @@ final class Importer {
 			if ( ! isset( $state['tables'][ $orig ] ) ) {
 				return new WP_Error( 'wp_chrono_import_order', "The dump inserts into {$orig} before creating it." );
 			}
+			if ( ! self::is_plain_insert( $sql ) ) {
+				return new WP_Error( 'wp_chrono_import_statement', sprintf( "The dump's INSERT into %s was refused: only plain VALUES lists of quoted values and NULL are imported.", $orig ), array( 'status' => 422 ) );
+			}
 			$copy     = Schema::snapshot_table_name( (string) $id, $orig );
 			$inserted = $wpdb->query( 'INSERT INTO ' . Database::quote_identifier( $copy ) . substr( $sql, strlen( $m[0] ) - 2 ) ); // phpcs:ignore WordPress.DB
 			if ( false === $inserted ) {
@@ -267,6 +274,9 @@ final class Importer {
 
 		if ( preg_match( '/^ALTER TABLE `((?:[^`]|``)+)` ADD (CONSTRAINT `(?:[^`]|``)+` FOREIGN KEY .+)$/s', $sql, $m ) ) {
 			$orig = str_replace( '``', '`', $m[1] );
+			if ( ! self::is_safe_fk( $m[2] ) ) {
+				return new WP_Error( 'wp_chrono_import_statement', sprintf( "The dump's foreign key on %s was refused: ", $orig ) . mb_substr( $m[2], 0, 80 ), array( 'status' => 422 ) );
+			}
 			if ( isset( $state['tables'][ $orig ] ) && empty( $state['known'][ $orig ]['fks'] ) ) {
 				$state['known'][ $orig ]['fks'][] = $m[2];
 				// phpcs:ignore WordPress.DB.DirectDatabaseQuery
@@ -308,6 +318,124 @@ final class Importer {
 		@unlink( $state['sql'] ); // phpcs:ignore
 		$this->snapshots->verify( $id );
 		return true;
+	}
+
+	// ---------------------------------------------------------------------
+	// Statement validation. A dump is untrusted input (uploaded file, shared
+	// bucket): every statement must have exactly the shape Exporter writes,
+	// so it can never read other tables (CREATE … SELECT, INSERT … SELECT),
+	// reach other servers (ENGINE=FEDERATED / CONNECT) or write files
+	// (DATA DIRECTORY).
+	// ---------------------------------------------------------------------
+
+	/**
+	 * Replaces every quoted literal with `S` and every backtick identifier
+	 * with `I`, so keyword checks can't be fooled by text inside values.
+	 * Null when a quote is never closed.
+	 */
+	public static function mask_literals( string $sql ): ?string {
+		$out = '';
+		$i   = 0;
+		$n   = strlen( $sql );
+		while ( $i < $n ) {
+			$len  = strcspn( $sql, "'\"`", $i );
+			$out .= substr( $sql, $i, $len );
+			$i   += $len;
+			if ( $i >= $n ) {
+				break;
+			}
+			$quote = $sql[ $i++ ];
+			$stops = '`' === $quote ? '`' : $quote . '\\';
+			while ( true ) {
+				$i += strcspn( $sql, $stops, $i );
+				if ( $i >= $n ) {
+					return null;
+				}
+				if ( '\\' === $sql[ $i ] ) {
+					$i += 2; // Backslash escape (not in identifiers).
+					continue;
+				}
+				if ( $i + 1 < $n && $sql[ $i + 1 ] === $quote ) {
+					$i += 2; // Doubled quote.
+					continue;
+				}
+				$i++;
+				break;
+			}
+			$out .= '`' === $quote ? 'I' : 'S';
+		}
+		return $out;
+	}
+
+	/**
+	 * Why a CREATE TABLE is refused, or null when it is a plain table definition.
+	 */
+	public static function refuse_create( string $sql ): ?string {
+		$masked = self::mask_literals( $sql );
+		if ( null === $masked || ! preg_match( '/^CREATE TABLE I \(/', $masked ) ) {
+			return 'malformed statement';
+		}
+		$depth = 0;
+		$close = -1;
+		$len   = strlen( $masked );
+		for ( $i = strpos( $masked, '(' ); $i < $len; $i++ ) {
+			if ( '(' === $masked[ $i ] ) {
+				$depth++;
+			} elseif ( ')' === $masked[ $i ] && 0 === --$depth ) {
+				$close = $i;
+				break;
+			}
+		}
+		if ( $close < 0 ) {
+			return 'unbalanced parentheses';
+		}
+		if ( preg_match( '/\bSELECT\b/i', substr( $masked, 0, $close ) ) ) {
+			return 'sub-queries are not allowed';
+		}
+		$tail = substr( $masked, $close + 1 );
+		if ( preg_match( '/\b(SELECT|LIKE|AS|UNION|DIRECTORY|CONNECTION|INSERT_METHOD|TABLESPACE|IGNORE|REPLACE)\b/i', $tail, $m ) ) {
+			return strtoupper( $m[1] ) . ' is not allowed after the column list';
+		}
+		if ( preg_match( '/\bENGINE\s*=\s*(\w+)/i', $tail, $m ) && ! in_array( strtolower( $m[1] ), array( 'innodb', 'myisam', 'aria', 'memory', 'heap' ), true ) ) {
+			return "storage engine {$m[1]} is not allowed";
+		}
+		return null;
+	}
+
+	/**
+	 * `INSERT INTO `t` (`a`,`b`) VALUES ('…',NULL),(…)` — nothing else.
+	 */
+	public static function is_plain_insert( string $sql ): bool {
+		$masked = self::mask_literals( $sql );
+		if ( null === $masked || ! preg_match( '/^INSERT INTO I \((?:\s*I\s*,)*\s*I\s*\) VALUES\s*/', $masked, $m ) ) {
+			return false;
+		}
+		// Each row: ( value [, value]* ), rows separated by commas. Checked
+		// row by row: one regex over thousands of rows exhausts PCRE's limits.
+		$rows = str_replace( 'NULL', 'S', (string) preg_replace( '/\s+/', '', substr( $masked, strlen( $m[0] ) ) ) );
+		if ( strlen( $rows ) < 3 || '(' !== $rows[0] || ')' !== substr( $rows, -1 ) ) {
+			return false;
+		}
+		foreach ( explode( '),(', substr( $rows, 1, -1 ) ) as $row ) {
+			if ( '' === $row || '' !== str_replace( array( 'S,', 'S' ), '', $row ) || false !== strpos( $row, ',,' ) || ',' === substr( $row, -1 ) || ',' === $row[0] ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * A foreign-key clause as SHOW CREATE TABLE prints it; nothing more can be
+	 * smuggled into the ALTER TABLE … ADD that re-creates it on restore.
+	 */
+	public static function is_safe_fk( $fk ): bool {
+		if ( ! is_string( $fk ) ) {
+			return false;
+		}
+		$masked = self::mask_literals( trim( $fk ) );
+		$list   = '\(\s*I(?:\s*,\s*I)*\s*\)';
+		$action = '(?:RESTRICT|CASCADE|SET NULL|NO ACTION|SET DEFAULT)';
+		return null !== $masked && (bool) preg_match( "/^CONSTRAINT I FOREIGN KEY {$list} REFERENCES I\s*{$list}(?: ON (?:DELETE|UPDATE) {$action})*$/", $masked );
 	}
 
 	/** 422 when the file itself is at fault (corrupt, truncated, refused), 500 for server-side failures. */

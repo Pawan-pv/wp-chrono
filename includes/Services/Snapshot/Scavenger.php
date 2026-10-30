@@ -151,6 +151,14 @@ final class Scavenger {
 	private function embedded_prefix_matches( string $orig ): bool {
 		global $wpdb;
 		$len = min( strlen( $orig ), strlen( $wpdb->prefix ) );
-		return substr( $orig, 0, $len ) === substr( $wpdb->prefix, 0, $len ) && ! Database::is_other_subsite_table( $orig );
+		if ( substr( $orig, 0, $len ) !== substr( $wpdb->prefix, 0, $len ) || Database::is_other_subsite_table( $orig ) ) {
+			return false;
+		}
+		foreach ( Database::foreign_prefixes() as $other ) {
+			if ( 0 === strpos( $orig, $other ) ) {
+				return false; // Another install's table (e.g. wp_shop_ next to wp_).
+			}
+		}
+		return true;
 	}
 }

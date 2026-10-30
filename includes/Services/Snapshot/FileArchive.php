@@ -3,7 +3,7 @@
  * Plugin / theme / WordPress core file archives for full update rollback.
  *
  * Before an update overwrites a plugin or theme, its folder is zipped into
- * `{storage}/rollbacks/snap-{id}-{type}-{slug}-{version}.zip` and recorded in
+ * `{storage}/rollbacks/snap-{id}-{type}-{slug}-{version}-{random}.zip` and recorded in
  * the auto-snapshot's meta (`rollback.files`), so "Undo update" can put back
  * the old files together with the old database.
  *
@@ -119,6 +119,52 @@ final class FileArchive {
 		return $targets;
 	}
 
+	/**
+	 * Rebuilds an archive entry from another source (cloud pull) for THIS
+	 * site: type, slug and file are checked against the shapes targets() /
+	 * core_targets() produce, and `target` is recomputed locally. Paths from
+	 * the source are never used, and `installed_to` (which removes a folder
+	 * on restore) is dropped. Null when the entry is not a plain plugin,
+	 * theme or core item.
+	 *
+	 * @param array<string,mixed> $entry
+	 * @return array<string,mixed>|null
+	 */
+	public static function localize_entry( array $entry ): ?array {
+		$type = (string) ( $entry['type'] ?? '' );
+		$slug = (string) ( $entry['slug'] ?? '' );
+		$file = (string) ( $entry['file'] ?? '' );
+		$safe = static function ( string $part ): bool {
+			return '' !== $part && '.' !== $part[0] && (bool) preg_match( '/^[A-Za-z0-9._ -]+$/', $part );
+		};
+		if ( ! $safe( $slug ) ) {
+			return null;
+		}
+		$local = null;
+		if ( 'plugin' === $type ) {
+			$single = (bool) preg_match( '/\.php$/', $slug ) && $file === $slug;
+			if ( ! $single && ! ( 0 === strpos( $file, $slug . '/' ) && $safe( substr( $file, strlen( $slug ) + 1 ) ) && '.php' === substr( $file, -4 ) ) ) {
+				return null;
+			}
+			$local = array( 'path' => WP_PLUGIN_DIR . '/' . $slug, 'single' => $single );
+		} elseif ( 'theme' === $type && $file === $slug ) {
+			$local = array( 'path' => get_theme_root( $slug ) . '/' . $slug, 'single' => false );
+		} elseif ( 'core' === $type ) {
+			foreach ( self::core_targets() as $core ) {
+				if ( $core['slug'] === $slug && $core['file'] === $file ) {
+					$local = array( 'path' => $core['path'], 'single' => $core['single'] );
+				}
+			}
+		}
+		if ( null === $local ) {
+			return null;
+		}
+		unset( $entry['installed_to'] );
+		$entry['single'] = $local['single'];
+		$entry['target'] = wp_normalize_path( $local['path'] );
+		return $entry;
+	}
+
 	/** The WordPress version on disk (wp-includes/version.php), not the one loaded in memory. */
 	public static function core_version(): string {
 		$source = (string) @file_get_contents( ABSPATH . WPINC . '/version.php' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors, WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
@@ -168,7 +214,9 @@ final class FileArchive {
 			return $dir;
 		}
 		$version = self::version( $target );
-		$name    = sprintf( 'snap-%d-%s-%s-%s.zip', $snapshot_id, $target['type'], self::safe( $target['slug'] ), self::safe( '' === $version ? 'unknown' : $version ) );
+		// Random token: on nginx the storage folder's .htaccess is ignored, so
+		// names must not be guessable (same rule as Storage::filename()).
+		$name    = sprintf( 'snap-%d-%s-%s-%s-%s.zip', $snapshot_id, $target['type'], self::safe( $target['slug'] ), self::safe( '' === $version ? 'unknown' : $version ), strtolower( wp_generate_password( 16, false ) ) );
 		$zip     = $dir . $name;
 
 		$ok = self::zip( $path, $target['single'], $zip );
@@ -373,9 +421,9 @@ final class FileArchive {
 	 *                     stay offline until it has.
 	 */
 	public static function maintenance_off( bool $created, bool $settle = false ): void {
-		if ( ! $created ) {
-			return;
-		}
+		// The settle wait also applies when someone else's `.maintenance` was
+		// already there (WordPress keeps one during bulk updates): requests
+		// must not run the replaced code once that window closes.
 		if ( $settle ) {
 			/**
 			 * Seconds to stay in maintenance mode after a folder swap that could
@@ -387,6 +435,9 @@ final class FileArchive {
 			if ( $seconds > 0 ) {
 				sleep( min( 30, $seconds ) );
 			}
+		}
+		if ( ! $created ) {
+			return;
 		}
 		@unlink( ABSPATH . '.maintenance' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors, WordPress.WP.AlternativeFunctions.unlink_unlink
 	}

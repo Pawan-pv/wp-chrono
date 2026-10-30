@@ -3,7 +3,7 @@ Tags: reset, snapshot, rollback, backup, recovery
 Requires at least: 6.3
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.0.2
+Stable tag: 1.0.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -106,7 +106,13 @@ Yes. Nginx ignores `.htaccess`, so WP Chrono stores everything in a `wp-content/
 
 = What exactly does Safe Updates undo, and what does it keep? =
 
-Everything the update batch changed: the plugin / theme folders it replaced and the whole database, back to the snapshot taken just before the update. Anything written to the database in the minute or so between that snapshot and the undo (for example a new order or comment) is rolled back too, which is the price of getting a working site back automatically. The snapshot itself is kept, so nothing is lost for good.
+The plugin / theme (or WordPress) files the update replaced, always. The database goes back to the snapshot taken just before the update only when nothing new arrived in the meantime: if a visitor placed an order, left a comment or registered (new posts, comments, users or WooCommerce orders since the snapshot), only the files are put back, so their data is never lost. The admin notice and email then say so, and you can still run a Full Undo yourself from the snapshot.
+
+A site only counts as broken when the failure repeats on three checks a few seconds apart; HTTP 503 (maintenance mode, overload) never counts.
+
+= What happens to my snapshots if I delete WP Chrono? =
+
+By default deleting the plugin removes everything it created: snapshots, exports and settings. To keep them for a reinstall, turn on Settings → "Keep snapshots if WP Chrono is deleted". The Emergency Recovery Script is always removed. Other WordPress installs that share the same database are never touched.
 
 = Does WP Chrono slow down my site? =
 
@@ -134,6 +140,17 @@ Settings & License (the gear icon) → License, paste the key and click Activate
 
 == Changelog ==
 
+= 1.0.3 =
+* Safety: Safe Updates no longer rolls the database back when visitors created new orders, comments, users or posts after the update started; it puts the files back and tells you. A failure must now repeat on three checks before anything is undone, and HTTP 503 (maintenance) never counts.
+* Safety: on databases shared by several WordPress installs (one table prefix each), resets, snapshots, restores and uninstall no longer touch another install's tables (for example `wp_shop_*` next to `wp_*`).
+* Security: pulling a backup from cloud storage only restores plugin / theme / core archives this site signed itself, with file paths rebuilt locally; a tampered bucket can no longer place code on the site.
+* Security: imported `.sql.gz` files are checked statement by statement and may only contain plain table definitions and value lists (no `SELECT`, functions or remote storage engines).
+* Security: snapshot diffs never unserialize objects; blueprint package URLs must use HTTPS; rollback archives get unguessable names.
+* Security (multisite): only super admins can create the Emergency Recovery Script, file restores and blueprints require the core install/update capabilities, and both follow `DISALLOW_FILE_MODS`.
+* Fix: a restore abandoned half-way (browser closed) blocked every restore, including automatic undos, for an hour. Idle jobs now expire after 10 minutes and Safe Updates takes them over.
+* Fix: after an undo run from WP-CLI or WP-Cron, PHP-FPM could keep serving the replaced plugin for a few seconds when WordPress's own maintenance file was in place.
+* New: Settings → "Keep snapshots if WP Chrono is deleted". Uninstall cleans every site of a network.
+
 = 1.0.2 =
 * New: **scheduled snapshots** — daily, or weekly on Sundays, at an hour you choose (site time zone), with their own retention. Built in small steps through WP-Cron, so they finish on hosts with short time limits.
 * New: WordPress core updates are snapshotted and archived (wp-admin, wp-includes, root files) and can be undone with Full Undo or from the Emergency Recovery Script. Safe Updates checks core updates too and undoes one that breaks the site.
@@ -157,6 +174,12 @@ Settings & License (the gear icon) → License, paste the key and click Activate
 * Pro: Blueprints (Reset to Dev Baseline) and bring-your-own-bucket cloud offload; offline Ed25519 license keys.
 
 == Upgrade Notice ==
+
+= 1.0.3 =
+Security and data-safety release: Safe Updates never deletes new orders or comments, safer cloud pulls and imports, shared-database fixes. Recommended for everyone.
+
+= 1.0.2 =
+Scheduled snapshots, and WordPress core updates can now be undone.
 
 = 1.0.1 =
 Adds Safe Updates (broken updates undo themselves) and fixes a rare race during undo. Recommended.

@@ -46,7 +46,58 @@ final class Database {
 	 */
 	public static function belongs_to_site( string $name ): bool {
 		global $wpdb;
-		return 0 === strpos( $name, $wpdb->prefix ) && ! self::is_other_subsite_table( $name );
+		if ( 0 !== strpos( $name, $wpdb->prefix ) || self::is_other_subsite_table( $name ) ) {
+			return false;
+		}
+		foreach ( self::foreign_prefixes() as $other ) {
+			if ( 0 === strpos( $name, $other ) ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Longer table prefixes of OTHER WordPress installs sharing this database
+	 * (shared hosting often runs several sites in one database), e.g. `wp_shop_`
+	 * next to this site's `wp_`. Their tables also start with `wp_`, so without
+	 * this a reset, snapshot or uninstall here would touch the other site.
+	 * An install is recognised by its own options, posts, postmeta and
+	 * term_taxonomy tables, which plugin tables never all mimic.
+	 *
+	 * @return string[]
+	 */
+	public static function foreign_prefixes(): array {
+		global $wpdb;
+		static $cache = array();
+		$key = $wpdb->dbname . '|' . $wpdb->prefix;
+		if ( isset( $cache[ $key ] ) ) {
+			return $cache[ $key ];
+		}
+		$names = array_flip(
+			(array) $wpdb->get_col( // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+				$wpdb->prepare(
+					'SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = %s AND TABLE_NAME LIKE %s',
+					$wpdb->dbname,
+					$wpdb->esc_like( $wpdb->prefix ) . '%'
+				)
+			)
+		);
+		$found = array();
+		foreach ( array_keys( $names ) as $table ) {
+			$table = (string) $table;
+			if ( 'options' !== substr( $table, -7 ) ) {
+				continue;
+			}
+			$other = substr( $table, 0, -7 );
+			if ( strlen( $other ) <= strlen( $wpdb->prefix ) || self::is_other_subsite_table( $other . 'options' ) ) {
+				continue;
+			}
+			if ( isset( $names[ $other . 'posts' ], $names[ $other . 'postmeta' ], $names[ $other . 'term_taxonomy' ] ) ) {
+				$found[] = $other;
+			}
+		}
+		return $cache[ $key ] = $found; // phpcs:ignore Squiz.PHP.DisallowMultipleAssignments
 	}
 
 	/**

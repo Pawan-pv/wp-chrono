@@ -31,8 +31,17 @@ final class Restorer {
 
 	const OPTION = 'wp_chrono_restore_job';
 
-	/** A job untouched for this long is considered abandoned. */
-	const STALE_AFTER = HOUR_IN_SECONDS;
+	/**
+	 * A job untouched for this long is considered abandoned (browser closed
+	 * mid-restore, request killed). Live jobs touch it at least every
+	 * TOUCH_EVERY seconds, also during one long WP-CLI tick.
+	 */
+	const STALE_AFTER = 10 * MINUTE_IN_SECONDS;
+
+	const TOUCH_EVERY = 30;
+
+	/** Automatic undo (Safe Updates) takes over a job idle for this long. */
+	const TAKEOVER_AFTER = 2 * MINUTE_IN_SECONDS;
 
 	/** @var SnapshotService */
 	private $snapshots;
@@ -62,7 +71,7 @@ final class Restorer {
 	 *                         network tables (users, blogs, …). Off by default.
 	 * @return array<string,mixed>|WP_Error
 	 */
-	public function start( int $snapshot_id, bool $drop_extra, bool $with_files = false, bool $include_network = false ) {
+	public function start( int $snapshot_id, bool $drop_extra, bool $with_files = false, bool $include_network = false, bool $takeover = false ) {
 		global $wpdb;
 		$snapshot = $this->snapshots->get( $snapshot_id );
 		if ( is_wp_error( $snapshot ) ) {
@@ -71,7 +80,11 @@ final class Restorer {
 		if ( 'ready' !== $snapshot['status'] ) {
 			return new WP_Error( 'wp_chrono_snapshot_state', sprintf( 'Snapshot #%d is not ready (status: %s).', $snapshot_id, $snapshot['status'] ), array( 'status' => 409 ) );
 		}
-		if ( self::active_job() ) {
+		$running = self::active_job();
+		if ( $running && $takeover && ( time() - (int) $running['touched'] ) > self::TAKEOVER_AFTER ) {
+			$running = null; // An idle manual restore must not block an automatic undo; cancel() below clears it.
+		}
+		if ( $running ) {
 			return new WP_Error( 'wp_chrono_restore_running', __( 'Another restore is already in progress.', 'wp-chrono' ), array( 'status' => 409 ) );
 		}
 		$this->cancel(); // Clears any stale job's staging tables.
@@ -80,7 +93,7 @@ final class Restorer {
 		$network = $include_network ? array() : Database::network_tables();
 		$tables  = array_diff_key( $tables, array_flip( $network ) );
 		foreach ( $tables as $orig => $row ) {
-			if ( 0 !== strpos( $orig, $wpdb->prefix ) ) {
+			if ( ! Database::belongs_to_site( $orig ) ) {
 				return new WP_Error( 'wp_chrono_prefix_mismatch', sprintf( 'Snapshot table %s does not use this site\'s prefix (%s).', $orig, $wpdb->prefix ), array( 'status' => 409 ) );
 			}
 			if ( ! TableCopier::exists( $row['snapshot_table'] ) ) {
@@ -180,6 +193,11 @@ final class Restorer {
 					// Swap the snapshot's JSON tag for the table's original comment.
 					TableCopier::set_comment( $table['stg'], (string) $table['comment'] );
 					$table['done'] = true;
+				}
+				if ( time() - (int) $job['touched'] >= self::TOUCH_EVERY ) {
+					// Long ticks (WP-CLI, INF budget) keep the job visibly alive.
+					$job['touched'] = time();
+					update_option( self::OPTION, $job, false );
 				}
 				if ( microtime( true ) >= $deadline ) {
 					break 2;

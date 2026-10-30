@@ -463,10 +463,12 @@ const SAFE_UPDATE: Record<SafeUpdateCheck['status'], { label: string; variant: '
 /** Safe Updates' verdict on the update batch this snapshot was taken for. */
 function SafeUpdateBadge({ check }: { check: SafeUpdateCheck }) {
   const look = SAFE_UPDATE[check.status] ?? SAFE_UPDATE.unverified;
+  // Files-only undo: new orders / comments arrived, so the database was kept.
+  const label = check.status === 'undone' && check.mode === 'files' ? 'Broken update undone (files only)' : look.label;
   return (
     <Badge variant={look.variant} title={check.message} data-e2e-safe-update={check.status}>
       <ShieldCheck className="h-3 w-3" />
-      {look.label}
+      {label}
     </Badge>
   );
 }
