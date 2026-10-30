@@ -316,6 +316,7 @@ $r = wp_remote_post(
 );
 wpc_check( 'dashboard (AJAX): update request answered', 200 === (int) wp_remote_retrieve_response_code( $r ), substr( (string) wp_remote_retrieve_body( $r ), 0, 160 ) );
 wpc_assert_checkout_undone( 'dashboard (AJAX)', $addon, true );
+wpc_guest_trace( '1b update.php (after 1a dashboard AJAX)' );
 
 // 1b. Dashboard without JavaScript: wp-admin/update.php deactivates the plugin,
 // updates it, then reactivates it in a second request (the "activate" iframe).
@@ -330,7 +331,7 @@ wp_cache_flush();
 $su = wpc_trigger_result();
 wpc_check( 'dashboard (update.php): plugin deactivated for the update → check deferred, not run on a site without the new code', 'watching' === ( $su['status'] ?? '' ) && $addon === ( SafeUpdates::state()['pending']['plugin'] ?? '' ) && ! is_plugin_active( $addon ), ( $su['status'] ?? 'none' ) . ' / pending=' . wp_json_encode( SafeUpdates::state()['pending'] ) );
 $amp      = '(?:&amp;|&#038;|&)'; // esc_url() writes & as &#038;.
-$activate = preg_match( '~update\.php\?action=activate-plugin' . $amp . 'networkwide=' . $amp . 'plugin=wpc-shop-addon%2Fwpc-shop-addon\.php' . $amp . '_wpnonce=([0-9a-f]+)~', $body, $m ) ? $m[1] : ''; // Not '#': $amp contains '&#038;'.
+$activate = preg_match( '~update\.php\?action=activate-plugin' . $amp . 'networkwide=?' . $amp . 'plugin=wpc-shop-addon%2Fwpc-shop-addon\.php' . $amp . '_wpnonce=([0-9a-f]+)~', $body, $m ) ? $m[1] : ''; // Not '#': $amp contains '&#038;'. WP 6.7+ writes an empty networkwide without '='.
 if ( '' === $activate ) {
 	echo '      update.php output: ' . substr( preg_replace( '/\s+/', ' ', wp_strip_all_tags( $body ) ), -300 ) . "\n";
 	preg_match_all( '~<iframe[^>]*>|[^"\'\s<>]*activate-plugin[^"\'\s<>]*~', $body, $wpc_raw );
@@ -340,6 +341,7 @@ wpc_check( 'dashboard (update.php): WordPress asks to reactivate it', '' !== $ac
 wp_remote_get( 'http://localhost:8088/wp-admin/update.php?action=activate-plugin&networkwide=&plugin=' . rawurlencode( $addon ) . '&_wpnonce=' . $activate, array( 'cookies' => $jar, 'timeout' => 300 ) );
 wpc_assert_checkout_undone( 'dashboard (update.php, after reactivation)', $addon, true );
 wpc_check( 'dashboard (update.php): plugin active again on v1.0', is_plugin_active( $addon ) && '1.0' === wpc_disk_version( $addon ) );
+wpc_guest_trace( '2 WP-CLI (after 1b update.php)' );
 
 // 2. WP-CLI: a separate `wp plugin update` process.
 wpc_addon_v1();
@@ -348,6 +350,7 @@ wpc_offer_update( $addon, '2.0' );
 exec( 'HOME=/tmp/wp-cli-home php -d memory_limit=512M /cache/wp-cli.phar' . WPC_CLI_ROOT . ' --path=' . escapeshellarg( untrailingslashit( ABSPATH ) ) . ' plugin update wpc-shop-addon 2>&1', $cli_out );
 wpc_check( 'WP-CLI: `wp plugin update` ran', false !== strpos( implode( "\n", $cli_out ), 'wpc-shop-addon' ), substr( implode( ' | ', $cli_out ), 0, 160 ) );
 wpc_assert_checkout_undone( 'WP-CLI', $addon );
+wpc_guest_trace( '3 auto-update (after 2 WP-CLI)' );
 
 // 3. Background auto-update: WordPress's own WP_Automatic_Updater (what WP-Cron runs).
 wpc_addon_v1();
@@ -360,6 +363,7 @@ exec( 'HOME=/tmp/wp-cli-home php -d memory_limit=512M /cache/wp-cli.phar' . WPC_
 wpc_check( 'auto-update: WP_Automatic_Updater ran in its own process', false !== strpos( implode( "
 ", $auto_out ), 'AUTO-DONE' ), substr( implode( ' | ', $auto_out ), -160 ) );
 wpc_assert_checkout_undone( 'auto-update (cron)', $addon );
+wpc_guest_trace( '4 remote management (after 3 auto-update)' );
 
 // 4. Remote-management dashboard: the upgrader runs inside a FRONT-END request.
 wpc_addon_v1();
@@ -369,6 +373,7 @@ update_option( 'wpc_remote_token', $wpc_token = wp_generate_password( 20, false 
 $r = wp_remote_get( 'http://localhost:8088/?wpc_remote_update=' . $wpc_token . '&plugin=' . rawurlencode( $addon ), array( 'timeout' => 300 ) );
 wpc_check( 'remote management: worker ran the update from a front-end request', false !== strpos( (string) wp_remote_retrieve_body( $r ), 'REMOTE-DONE' ), is_wp_error( $r ) ? $r->get_error_message() : 'HTTP ' . wp_remote_retrieve_response_code( $r ) . ' ' . substr( wp_strip_all_tags( (string) wp_remote_retrieve_body( $r ) ), 0, 200 ) );
 wpc_assert_checkout_undone( 'remote management', $addon );
+wpc_guest_trace( 'end of triggers (after 4 remote management)' );
 delete_option( 'wpc_remote_token' );
 delete_site_transient( 'update_plugins' );
 

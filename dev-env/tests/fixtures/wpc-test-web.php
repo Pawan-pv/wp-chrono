@@ -93,12 +93,16 @@ add_action(
 		if ( '' === $mode || is_admin() || is_user_logged_in() || 'GET' !== ( $_SERVER['REQUEST_METHOD'] ?? '' ) || ( defined( 'WP_CLI' ) && WP_CLI ) ) {
 			return;
 		}
-		if ( ! isset( $_GET['page_id'] ) || (int) $_GET['page_id'] !== (int) get_option( 'woocommerce_cart_page_id' ) ) {
+		// The cart by ?page_id= (plain permalinks) or by its path (pretty permalinks).
+		$cart = (int) get_option( 'woocommerce_cart_page_id' );
+		$path = trailingslashit( (string) wp_parse_url( (string) ( $_SERVER['REQUEST_URI'] ?? '' ), PHP_URL_PATH ) );
+		$is   = isset( $_GET['page_id'] ) ? (int) $_GET['page_id'] === $cart : ( $cart && trailingslashit( (string) wp_parse_url( (string) get_permalink( $cart ), PHP_URL_PATH ) ) === $path && '/' !== $path );
+		if ( ! $is ) {
 			return;
 		}
-		$query = wp_unslash( $_GET );
+		$query = wp_unslash( $_GET ) + array( '__path' => $path );
 		if ( 'strip' === $mode ) {
-			$query = array_intersect_key( $query, array( 'page_id' => 1 ) );
+			$query = array_intersect_key( $query, array( 'page_id' => 1, '__path' => 1 ) );
 		}
 		ksort( $query );
 		$file = get_temp_dir() . 'wpc-cache-' . md5( http_build_query( $query ) ) . '.html';
