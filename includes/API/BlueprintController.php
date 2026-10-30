@@ -28,6 +28,9 @@ defined( 'ABSPATH' ) || exit;
 
 final class BlueprintController extends RestController {
 
+	/** Applying a blueprint installs, activates and may delete plugins and themes. */
+	const CODE_CAPS = array( 'install_plugins', 'install_themes', 'activate_plugins', 'switch_themes', 'delete_plugins' );
+
 	/** @var BlueprintService */
 	private $service;
 
@@ -156,7 +159,7 @@ final class BlueprintController extends RestController {
 	 * @return \WP_REST_Response|WP_Error
 	 */
 	public function import( WP_REST_Request $request ) {
-		$locked = $this->require_pro( 'blueprints' );
+		$locked = $this->require_code_caps() ?? $this->require_pro( 'blueprints' );
 		if ( $locked ) {
 			return $locked;
 		}
@@ -190,7 +193,7 @@ final class BlueprintController extends RestController {
 	 * @return \WP_REST_Response|WP_Error
 	 */
 	public function upload( WP_REST_Request $request ) {
-		$locked = $this->require_pro( 'blueprints' );
+		$locked = $this->require_code_caps() ?? $this->require_pro( 'blueprints' );
 		if ( $locked ) {
 			return $locked;
 		}
@@ -218,7 +221,7 @@ final class BlueprintController extends RestController {
 	 * @return \WP_REST_Response|WP_Error
 	 */
 	public function apply( WP_REST_Request $request ) {
-		$locked = $this->require_pro( 'blueprints' );
+		$locked = $this->require_code_caps() ?? $this->require_pro( 'blueprints' );
 		if ( $locked ) {
 			return $locked;
 		}
@@ -227,5 +230,9 @@ final class BlueprintController extends RestController {
 		}
 		$result = $this->service->apply_step( (string) $request['id'], (int) $request['step'] );
 		return is_wp_error( $result ) ? $result : $this->ok( $result );
+	}
+
+	private function require_code_caps(): ?WP_Error {
+		return $this->require_caps( self::CODE_CAPS, 'Blueprints install plugins and themes, which your account cannot do on this site. On multisite only super admins can, and nobody can while DISALLOW_FILE_MODS is set.' );
 	}
 }

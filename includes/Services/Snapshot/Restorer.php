@@ -330,7 +330,10 @@ final class Restorer {
 		delete_option( 'core_updater.lock' );
 		delete_option( 'auto_updater.lock' );
 		$active = (array) get_option( 'active_plugins', array() );
-		if ( ! in_array( WP_CHRONO_BASENAME, $active, true ) ) {
+		// Network-activated: a site-level entry would keep WP Chrono running on
+		// this site after a Network Deactivate (and block uninstall).
+		$network = is_multisite() && isset( ( (array) get_site_option( 'active_sitewide_plugins', array() ) )[ WP_CHRONO_BASENAME ] );
+		if ( ! $network && ! in_array( WP_CHRONO_BASENAME, $active, true ) ) {
 			$active[] = WP_CHRONO_BASENAME;
 			update_option( 'active_plugins', $active );
 			$log[] = 'Re-activated WP Chrono (it was inactive in the snapshot).';

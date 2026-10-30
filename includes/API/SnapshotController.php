@@ -343,6 +343,13 @@ final class SnapshotController extends RestController {
 	 */
 	public function restore( WP_REST_Request $request ) {
 		$error = $this->confirmed( $request, 'RESTORE' );
+		if ( ! $error && 'db' !== $request['mode'] ) {
+			// Plugin, theme and core folders are shared by the whole network.
+			$error = $this->require_caps(
+				array( 'update_plugins', 'update_themes', 'update_core' ),
+				'Restoring files replaces plugin, theme and WordPress folders, which your account cannot do on this site. Restore the database only, or ask a super admin.'
+			);
+		}
 		// Network tables (users, blogs…) belong to the whole network: super admins only.
 		$network = (bool) $request['include_network_tables'] && is_super_admin();
 		return $error ?? $this->respond( $this->service->restore( (int) $request['id'], (bool) $request['drop_extra'], (string) $request['mode'], $network ) );

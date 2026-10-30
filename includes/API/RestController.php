@@ -75,6 +75,25 @@ abstract class RestController {
 	}
 
 	/**
+	 * HTTP 403 unless the user holds every one of $caps, else null.
+	 *
+	 * `manage_options` alone is not enough for actions that put code on disk:
+	 * multisite subsite admins hold it, and so do admins on sites that set
+	 * DISALLOW_FILE_MODS. Core maps install_* / update_* to `do_not_allow` in
+	 * both cases, so checking them inherits the site's own policy.
+	 *
+	 * @param string[] $caps
+	 */
+	protected function require_caps( array $caps, string $message ): ?WP_Error {
+		foreach ( $caps as $cap ) {
+			if ( ! current_user_can( $cap ) ) {
+				return new WP_Error( 'wp_chrono_forbidden', $message, array( 'status' => 403 ) );
+			}
+		}
+		return null;
+	}
+
+	/**
 	 * @param mixed $data
 	 */
 	protected function ok( $data, int $status = 200 ): WP_REST_Response {
