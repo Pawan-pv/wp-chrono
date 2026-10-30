@@ -308,7 +308,11 @@ $body = (string) wp_remote_retrieve_body( wp_remote_get( 'http://localhost:8088/
 wp_cache_flush();
 $su = wpc_trigger_result();
 wpc_check( 'dashboard (update.php): plugin deactivated for the update → check deferred, not run on a site without the new code', 'watching' === ( $su['status'] ?? '' ) && $addon === ( SafeUpdates::state()['pending']['plugin'] ?? '' ) && ! is_plugin_active( $addon ), ( $su['status'] ?? 'none' ) . ' / pending=' . wp_json_encode( SafeUpdates::state()['pending'] ) );
-$activate = preg_match( '#update\.php\?action=activate-plugin(?:&amp;|&)networkwide=(?:&amp;|&)plugin=wpc-shop-addon%2Fwpc-shop-addon\.php(?:&amp;|&)_wpnonce=([0-9a-f]+)#', $body, $m ) ? $m[1] : '';
+$amp      = '(?:&amp;|&#038;|&)'; // esc_url() writes & as &#038;.
+$activate = preg_match( '#update\.php\?action=activate-plugin' . $amp . 'networkwide=' . $amp . 'plugin=wpc-shop-addon%2Fwpc-shop-addon\.php' . $amp . '_wpnonce=([0-9a-f]+)#', $body, $m ) ? $m[1] : '';
+if ( '' === $activate ) {
+	echo '      update.php output: ' . substr( preg_replace( '/\s+/', ' ', wp_strip_all_tags( $body ) ), -300 ) . "\n";
+}
 wpc_check( 'dashboard (update.php): WordPress asks to reactivate it', '' !== $activate );
 wp_remote_get( 'http://localhost:8088/wp-admin/update.php?action=activate-plugin&networkwide=&plugin=' . rawurlencode( $addon ) . '&_wpnonce=' . $activate, array( 'cookies' => $jar, 'timeout' => 300 ) );
 wpc_assert_checkout_undone( 'dashboard (update.php, after reactivation)', $addon, true );
@@ -359,8 +363,8 @@ $files = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $root, F
 foreach ( $files as $file ) {
 	$rel = ltrim( substr( wp_normalize_path( $file->getPathname() ), strlen( wp_normalize_path( $root ) ) ), '/' );
 	$top = strtok( $rel, '/' );
-	if ( ! in_array( $top, array( 'wp-admin', 'wp-includes' ), true ) && ( false !== strpos( $rel, '/' ) || '.php' !== substr( $rel, -4 ) || 'wp-config.php' === $rel ) ) {
-		continue; // Core only: wp-admin, wp-includes, root *.php (never wp-config / wp-content).
+	if ( ! in_array( $top, array( 'wp-admin', 'wp-includes' ), true ) && ( false !== strpos( $rel, '/' ) || '.' === $rel[0] || 'wp-config.php' === $rel ) ) {
+		continue; // Core only: wp-admin, wp-includes, root files incl. readme.html (update_core() checks it); never wp-config / wp-content / dotfiles.
 	}
 	if ( 'wp-includes/version.php' === $rel ) {
 		$zip->addFromString( 'wordpress/' . $rel, str_replace( "\$wp_version = '{$wpc_core_from}';", "\$wp_version = '{$wpc_core_to}';", file_get_contents( $file->getPathname() ) ) );
@@ -506,7 +510,7 @@ update_option( 'wpc_test_cache', 'strip' ); // Cache key ignores unknown query p
 wpc_addon_v1();
 wp_remote_get( $plain );
 $su = wpc_update_addon( '7.0' );
-wpc_check( 'cache ignoring query strings: the cart is never reported as working', null === ( $su['after']['pages']['wc_cart']['ok'] ?? 'missing' ) && null === ( $su['baseline']['pages']['wc_cart']['ok'] ?? 'missing' ), (string) ( $su['after']['pages']['wc_cart']['reason'] ?? 'missing' ) );
+wpc_check( 'cache ignoring query strings: the cart is never reported as working', null === ( $su['after']['pages']['wc_cart']['ok'] ?? 'missing' ) && null === ( $su['baseline']['pages']['wc_cart']['ok'] ?? 'missing' ), 'baseline: ' . (string) ( $su['baseline']['pages']['wc_cart']['reason'] ?? 'missing' ) . ' | after: ' . (string) ( $su['after']['pages']['wc_cart']['reason'] ?? 'missing' ) );
 wpc_check( '…it is logged as skipped (served from a cache), not as passed', false !== strpos( (string) ( $su['skipped']['wc_cart'] ?? '' ), 'cache' ) && false !== strpos( (string) ( $su['message'] ?? '' ), 'Not checked' ), (string) ( $su['skipped']['wc_cart'] ?? 'not logged' ) );
 delete_option( 'wpc_test_cache' );
 array_map( 'unlink', glob( get_temp_dir() . 'wpc-cache-*.html' ) ?: array() );
@@ -554,7 +558,16 @@ $probe = SafeUpdates::probe();
 wpc_check( 'block checkout back (wp-block-woocommerce-checkout)', in_array( 'wp-block-woocommerce-checkout', (array) ( $probe['pages']['wc_checkout']['markers'] ?? array() ), true ) );
 
 echo "\n== Store data after every probe of this suite ==\n";
-wpc_check( 'no session, order or saved cart was created by any probe', wpc_store_rows() === $store_before, wp_json_encode( wpc_store_rows() ) . ' vs ' . wp_json_encode( $store_before ) );
+// Probes are anonymous: a guest session would mean a probe stored data. The
+// suite itself also logs in as the admin and updates through admin-ajax.php,
+// where WooCommerce keeps a session for that logged-in user: not a probe's.
+global $wpdb;
+$wpc_keys   = $wpdb->get_col( "SELECT session_key FROM {$wpdb->prefix}woocommerce_sessions" );
+$wpc_guests = array_values( array_filter( $wpc_keys, static function ( $k ) { return ! ( ctype_digit( (string) $k ) && get_userdata( (int) $k ) ); } ) );
+$wpc_rows   = wpc_store_rows();
+echo '      sessions: ' . wp_json_encode( $wpc_keys ) . "\n";
+wpc_check( 'no guest session was created by any probe', array() === $wpc_guests, wp_json_encode( $wpc_guests ) );
+wpc_check( 'no order or saved cart was created by any probe', array( $wpc_rows['orders'], $wpc_rows['carts'], $wpc_rows['hpos_orders'] ) === array( $store_before['orders'], $store_before['carts'], $store_before['hpos_orders'] ), wp_json_encode( $wpc_rows ) . ' vs ' . wp_json_encode( $store_before ) );
 
 echo "\n== A real order arrives before the break is detected ==\n";
 wpc_addon_v1();
