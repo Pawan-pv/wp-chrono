@@ -25,8 +25,10 @@ use WPChrono\Services\Settings;
 use WPChrono\Services\Snapshot\FileArchive;
 use WPChrono\Services\SnapshotService;
 
-echo "== Setup ==\n";
+wpc_guest_trace( 'Setup' ); echo "== Setup ==\n";
 $wpc_home = untrailingslashit( home_url() );
+// Dev stack: PHP runs as root, and WP-CLI refuses that without --allow-root.
+define( 'WPC_CLI_ROOT', function_exists( 'posix_geteuid' ) && 0 === posix_geteuid() ? ' --allow-root' : '' );
 add_filter( 'wp_chrono_safe_updates_probe_url', static function ( $url ) use ( $wpc_home ) {
 	return str_replace( $wpc_home, 'http://localhost', $url );
 } );
@@ -58,6 +60,22 @@ function wpc_reset_batch(): void {
 	delete_transient( SnapshotService::AUTO_LOCK );
 	wp_cache_flush();
 }
+
+/** Prints guest WooCommerce sessions when new ones appeared, so the step that made one is visible. */
+function wpc_guest_trace( string $next ): void {
+	global $wpdb;
+	static $seen = array();
+	if ( ! function_exists( 'WC' ) || ! $wpdb->get_var( "SHOW TABLES LIKE '{$wpdb->prefix}woocommerce_sessions'" ) ) {
+		return;
+	}
+	$now = $wpdb->get_col( "SELECT session_key FROM {$wpdb->prefix}woocommerce_sessions WHERE session_key NOT REGEXP '^[0-9]+$'" );
+	$new = array_diff( $now, $seen );
+	if ( $new ) {
+		echo '      [trace] new guest session(s) before "' . $next . '": ' . implode( ', ', $new ) . "\n";
+	}
+	$seen = $now;
+}
+
 /** Rows that would show a probe wrote store data: sessions, orders, saved carts. */
 function wpc_store_rows(): array {
 	global $wpdb;
@@ -172,7 +190,7 @@ wpc_plugin_zip( 'wpc-shop-addon', '7.0', $v7 );
 wp_mkdir_p( WPMU_PLUGIN_DIR );
 file_put_contents( WPMU_PLUGIN_DIR . '/wpc-slow-page.php', "<?php\nif ( isset( \$_GET['wpc_slow'] ) ) { sleep( 6 ); }\n" );
 
-echo "\n== Shop pages are part of the check ==\n";
+wpc_guest_trace( 'Shop pages are part of the check' ); echo "\n== Shop pages are part of the check ==\n";
 $targets = SafeUpdates::targets();
 foreach ( array( 'cart', 'checkout', 'myaccount' ) as $page ) {
 	wpc_check( "target wc_{$page} → wc_get_page_permalink( '{$page}' )", isset( $targets[ "wc_{$page}" ] ) && wc_get_page_permalink( $page ) === $targets[ "wc_{$page}" ]['url'], $targets[ "wc_{$page}" ]['url'] ?? 'missing' );
@@ -185,13 +203,16 @@ foreach ( array( 'cart', 'checkout', 'myaccount' ) as $page ) {
 	wpc_check( "{$page}: loaded with its WooCommerce markup", true === ( $r['ok'] ?? null ) && 200 === ( $r['status'] ?? 0 ), (string) ( $r['reason'] ?? 'missing' ) );
 }
 wpc_check( 'empty-cart checkout is loaded, not redirected to the cart (probe mode)', 200 === ( $probe['pages']['wc_checkout']['status'] ?? 0 ) );
-$plain = wp_remote_get( 'http://localhost/?page_id=' . wc_get_page_id( 'checkout' ), array( 'redirection' => 0, 'headers' => array( 'Host' => 'localhost:8088' ) ) );
-wpc_check( 'a normal visitor with an empty cart is still redirected (probe mode is not global)', 302 === (int) wp_remote_retrieve_response_code( $plain ) );
-$forged = wp_remote_get( 'http://localhost/?page_id=' . wc_get_page_id( 'checkout' ) . '&wpc_probe=forgedtoken123', array( 'redirection' => 0, 'headers' => array( 'Host' => 'localhost:8088' ) ) );
-wpc_check( 'a forged probe token changes nothing', 302 === (int) wp_remote_retrieve_response_code( $forged ) );
+// The real permalink: with pretty permalinks (prod stack) ?page_id= would get
+// WordPress's canonical 301 instead of WooCommerce's empty-cart 302.
+$wpc_checkout = str_replace( $wpc_home, 'http://localhost', wc_get_page_permalink( 'checkout' ) );
+$plain        = wp_remote_get( $wpc_checkout, array( 'redirection' => 0 ) );
+wpc_check( 'a normal visitor with an empty cart is still redirected (probe mode is not global)', 302 === (int) wp_remote_retrieve_response_code( $plain ), 'HTTP ' . wp_remote_retrieve_response_code( $plain ) );
+$forged = wp_remote_get( add_query_arg( 'wpc_probe', 'forgedtoken123', $wpc_checkout ), array( 'redirection' => 0 ) );
+wpc_check( 'a forged probe token changes nothing', 302 === (int) wp_remote_retrieve_response_code( $forged ), 'HTTP ' . wp_remote_retrieve_response_code( $forged ) );
 wpc_check( 'probes created no session, order or saved cart', wpc_store_rows() === $store_before, wp_json_encode( wpc_store_rows() ) );
 
-echo "\n== Checkout broken (PHP fatal) while the home page works ==\n";
+wpc_guest_trace( 'Checkout broken (PHP fatal) while the home page works' ); echo "\n== Checkout broken (PHP fatal) while the home page works ==\n";
 $GLOBALS['wpc_mails'] = array();
 $su = wpc_update_addon( '2.0' );
 wpc_check( 'baseline covered the shop pages', isset( wpc_last_auto()['meta']['safe_update']['baseline']['pages']['wc_checkout'] ) );
@@ -202,13 +223,13 @@ wpc_check( 'files back to 1.0, database back to v1', '1.0' === wpc_disk_version(
 wpc_check( 'message and email name the checkout', false !== strpos( (string) ( $su['message'] ?? '' ), 'checkout' ) && 1 === count( $GLOBALS['wpc_mails'] ) );
 wpc_check( 'the failure repeated on every check before the undo (3 probes)', 'wc_checkout' === implode( ',', $su['failing'] ?? array() ) );
 
-echo "\n== Checkout renders WITHOUT its form (HTTP 200, no PHP error) ==\n";
+wpc_guest_trace( 'Checkout renders WITHOUT its form (HTTP 200, no PHP error)' ); echo "\n== Checkout renders WITHOUT its form (HTTP 200, no PHP error) ==\n";
 $su = wpc_update_addon( '3.0' );
 wpc_check( 'update undone although no fatal occurred', 'undone' === ( $su['status'] ?? '' ) && null === ( $su['error'] ?? null ), ( $su['status'] ?? 'none' ) . ': ' . ( $su['reason'] ?? '' ) );
 wpc_check( 'reason: the checkout content is missing', false !== strpos( (string) ( $su['reason'] ?? '' ), 'the WooCommerce checkout: HTTP 200 but the page content is missing' ), (string) ( $su['reason'] ?? '' ) );
 wpc_check( 'files back to 1.0', '1.0' === wpc_disk_version( $addon ) );
 
-echo "\n== Three failures per URL: a one-off error on one page is not \"broken\" ==\n";
+wpc_guest_trace( 'Three failures per URL: a one-off error on one page is not "broken"' ); echo "\n== Three failures per URL: a one-off error on one page is not \"broken\" ==\n";
 $checkout_id = wc_get_page_id( 'checkout' );
 $wpc_fake    = array( 'left' => 0 );
 add_filter( 'pre_http_request', $wpc_fake_filter = static function ( $pre, $args, $url ) use ( &$wpc_fake, $checkout_id ) {
@@ -226,14 +247,14 @@ remove_action( 'upgrader_process_complete', $wpc_arm, 5 );
 remove_filter( 'pre_http_request', $wpc_fake_filter, 10 );
 wpc_check( 'checkout failed twice, then worked → "passed", nothing undone', 'passed' === ( $su['status'] ?? '' ) && '4.0' === wpc_disk_version( $addon ), ( $su['status'] ?? 'none' ) . ': ' . ( $su['message'] ?? '' ) );
 
-echo "\n== A slow page is not a broken page ==\n";
+wpc_guest_trace( 'A slow page is not a broken page' ); echo "\n== A slow page is not a broken page ==\n";
 Settings::update( array( 'safe_updates_urls' => array( home_url( '/?wpc_slow=1' ) ) ) );
 $su   = wpc_update_addon( '5.0' );
 $slow = $su['after']['pages']['url_1'] ?? array();
 wpc_check( 'custom URL took > 5 s and counted as working', true === ( $slow['ok'] ?? null ) && ( $slow['ms'] ?? 0 ) >= 5000, ( $slow['ms'] ?? 0 ) . ' ms, ' . ( $slow['reason'] ?? 'missing' ) );
 wpc_check( 'update kept ("passed")', 'passed' === ( $su['status'] ?? '' ) && '5.0' === wpc_disk_version( $addon ), ( $su['status'] ?? 'none' ) . ': ' . ( $su['message'] ?? '' ) );
 
-echo "\n== Custom URLs (setting + filter) ==\n";
+wpc_guest_trace( 'Custom URLs (setting + filter)' ); echo "\n== Custom URLs (setting + filter) ==\n";
 Settings::update( array( 'safe_updates_urls' => array( home_url( '/?wpc_custom=1' ), 'https://evil.example/steal', home_url( '/?wpc_custom=1' ) ) ) );
 wpc_check( 'setting keeps only this site\'s URLs, without duplicates', array( home_url( '/?wpc_custom=1' ) ) === Settings::get()['safe_updates_urls'], wp_json_encode( Settings::get()['safe_updates_urls'] ) );
 add_filter( 'wp_chrono_safe_updates_probe_targets', $wpc_extra = static function ( $t ) {
@@ -249,7 +270,7 @@ wpc_check( 'fatal on a custom URL only → undone', 'undone' === ( $su['status']
 wpc_check( 'add-on back to 5.0', '5.0' === wpc_disk_version( $addon ) );
 Settings::update( array( 'safe_updates_urls' => array() ) );
 
-echo "\n== Loopback blocked by the host ==\n";
+wpc_guest_trace( 'Loopback blocked by the host' ); echo "\n== Loopback blocked by the host ==\n";
 add_filter( 'wp_chrono_safe_updates_probe_url', $wpc_dead = static function () {
 	return 'http://localhost:9/'; // Nothing listens: loopback refused.
 }, 20 );
@@ -266,7 +287,7 @@ wpc_addon_v1();
 $su = wpc_update_addon( '4.0' );
 wpc_check( 'next checkable update clears the notice', 'passed' === ( $su['status'] ?? '' ) && null === SafeUpdates::state()['loopback'], ( $su['status'] ?? 'none' ) );
 
-echo "\n== Every update trigger runs the full check (checkout breaks, home page fine) ==\n";
+wpc_guest_trace( 'Every update trigger runs the full check (checkout breaks, home page fine)' ); echo "\n== Every update trigger runs the full check (checkout breaks, home page fine) ==\n";
 /** Asserts the newest auto-snapshot's check undid a checkout-only break. */
 function wpc_assert_checkout_undone( string $trigger, string $addon, bool $admin = false ): void {
 	$su   = wpc_trigger_result();
@@ -312,6 +333,8 @@ $amp      = '(?:&amp;|&#038;|&)'; // esc_url() writes & as &#038;.
 $activate = preg_match( '~update\.php\?action=activate-plugin' . $amp . 'networkwide=' . $amp . 'plugin=wpc-shop-addon%2Fwpc-shop-addon\.php' . $amp . '_wpnonce=([0-9a-f]+)~', $body, $m ) ? $m[1] : ''; // Not '#': $amp contains '&#038;'.
 if ( '' === $activate ) {
 	echo '      update.php output: ' . substr( preg_replace( '/\s+/', ' ', wp_strip_all_tags( $body ) ), -300 ) . "\n";
+	preg_match_all( '~<iframe[^>]*>|[^"\'\s<>]*activate-plugin[^"\'\s<>]*~', $body, $wpc_raw );
+	echo '      raw reactivation markup: ' . ( $wpc_raw[0] ? implode( ' | ', array_unique( $wpc_raw[0] ) ) : 'none (no iframe, no activate-plugin URL)' ) . "\n";
 }
 wpc_check( 'dashboard (update.php): WordPress asks to reactivate it', '' !== $activate );
 wp_remote_get( 'http://localhost:8088/wp-admin/update.php?action=activate-plugin&networkwide=&plugin=' . rawurlencode( $addon ) . '&_wpnonce=' . $activate, array( 'cookies' => $jar, 'timeout' => 300 ) );
@@ -322,7 +345,7 @@ wpc_check( 'dashboard (update.php): plugin active again on v1.0', is_plugin_acti
 wpc_addon_v1();
 wpc_reset_batch();
 wpc_offer_update( $addon, '2.0' );
-exec( 'HOME=/tmp/wp-cli-home php -d memory_limit=512M /cache/wp-cli.phar --path=' . escapeshellarg( untrailingslashit( ABSPATH ) ) . ' plugin update wpc-shop-addon 2>&1', $cli_out );
+exec( 'HOME=/tmp/wp-cli-home php -d memory_limit=512M /cache/wp-cli.phar' . WPC_CLI_ROOT . ' --path=' . escapeshellarg( untrailingslashit( ABSPATH ) ) . ' plugin update wpc-shop-addon 2>&1', $cli_out );
 wpc_check( 'WP-CLI: `wp plugin update` ran', false !== strpos( implode( "\n", $cli_out ), 'wpc-shop-addon' ), substr( implode( ' | ', $cli_out ), 0, 160 ) );
 wpc_assert_checkout_undone( 'WP-CLI', $addon );
 
@@ -333,7 +356,7 @@ wpc_offer_update( $addon, '2.0' );
 delete_option( 'auto_updater.lock' );
 // In its own process, as WP-Cron runs it (core's `pre_auto_update` marks the whole process).
 // The lab's wp-config disables auto-updates; the child lifts that for this run only.
-exec( 'HOME=/tmp/wp-cli-home php -d memory_limit=512M /cache/wp-cli.phar --path=' . escapeshellarg( untrailingslashit( ABSPATH ) ) . ' eval ' . escapeshellarg( 'add_filter( "automatic_updater_disabled", "__return_false" ); add_filter( "auto_update_plugin", function ( $u, $i ) { return "wpc-shop-addon/wpc-shop-addon.php" === ( $i->plugin ?? "" ) ? true : $u; }, 10, 2 ); wp_maybe_auto_update(); echo "AUTO-DONE";' ) . ' 2>&1', $auto_out );
+exec( 'HOME=/tmp/wp-cli-home php -d memory_limit=512M /cache/wp-cli.phar' . WPC_CLI_ROOT . ' --path=' . escapeshellarg( untrailingslashit( ABSPATH ) ) . ' eval ' . escapeshellarg( 'add_filter( "automatic_updater_disabled", "__return_false" ); add_filter( "auto_update_plugin", function ( $u, $i ) { return "wpc-shop-addon/wpc-shop-addon.php" === ( $i->plugin ?? "" ) ? true : $u; }, 10, 2 ); wp_maybe_auto_update(); echo "AUTO-DONE";' ) . ' 2>&1', $auto_out );
 wpc_check( 'auto-update: WP_Automatic_Updater ran in its own process', false !== strpos( implode( "
 ", $auto_out ), 'AUTO-DONE' ), substr( implode( ' | ', $auto_out ), -160 ) );
 wpc_assert_checkout_undone( 'auto-update (cron)', $addon );
@@ -349,7 +372,7 @@ wpc_assert_checkout_undone( 'remote management', $addon );
 delete_option( 'wpc_remote_token' );
 delete_site_transient( 'update_plugins' );
 
-echo "\n== WordPress core updates run the full check too (core update breaks checkout) ==\n";
+wpc_guest_trace( 'WordPress core updates run the full check too (core update breaks checkout)' ); echo "\n== WordPress core updates run the full check too (core update breaks checkout) ==\n";
 // A core "release" built from this site's own core files: version bumped, and
 // default-filters.php made to fatal on the checkout only. Undo must put the
 // original core back on every trigger.
@@ -421,7 +444,7 @@ function wpc_assert_core_undone( string $trigger, string $from, string $to, bool
 	}
 	sleep( 3 ); // Let PHP-FPM's OPcache see the restored core before the next trigger.
 }
-$wpc_cli = 'HOME=/tmp/wp-cli-home php -d memory_limit=512M /cache/wp-cli.phar --path=' . escapeshellarg( untrailingslashit( ABSPATH ) );
+$wpc_cli = 'HOME=/tmp/wp-cli-home php -d memory_limit=512M /cache/wp-cli.phar' . WPC_CLI_ROOT . ' --path=' . escapeshellarg( untrailingslashit( ABSPATH ) );
 wpc_addon_v1();
 
 // 5a. WP-CLI: `wp core update <zip>`.
@@ -470,7 +493,7 @@ delete_site_transient( 'update_core' );
 wpc_core_ready();
 @unlink( $wpc_core_pkg );
 
-echo "\n== Caches: every check request is cache-busting ==\n";
+wpc_guest_trace( 'Caches: every check request is cache-busting' ); echo "\n== Caches: every check request is cache-busting ==\n";
 $wpc_seen = array();
 add_filter( 'http_request_args', $wpc_spy = static function ( $args, $url ) use ( &$wpc_seen ) {
 	if ( false !== strpos( (string) $url, 'wpc_probe=' ) ) {
@@ -487,7 +510,7 @@ wpc_check( 'and no-cache request headers', false !== strpos( (string) ( $headers
 
 // Anonymous visitors with an empty cart are redirected away from the checkout,
 // so the cache test uses the cart page (cached for visitors, like a real store).
-$plain = 'http://localhost:8088/?page_id=' . wc_get_page_id( 'cart' );
+$plain = wc_get_page_permalink( 'cart' ); // Not ?page_id=: its canonical 301 would leave the :8088 loopback rewrite.
 wpc_addon_v1();
 update_option( 'wpc_test_cache', 'full' );
 wp_remote_get( $plain );
@@ -510,12 +533,12 @@ update_option( 'wpc_test_cache', 'strip' ); // Cache key ignores unknown query p
 wpc_addon_v1();
 wp_remote_get( $plain );
 $su = wpc_update_addon( '7.0' );
-wpc_check( 'cache ignoring query strings: the cart is never reported as working', null === ( $su['after']['pages']['wc_cart']['ok'] ?? 'missing' ) && null === ( $su['baseline']['pages']['wc_cart']['ok'] ?? 'missing' ), 'baseline: ' . (string) ( $su['baseline']['pages']['wc_cart']['reason'] ?? 'missing' ) . ' | after: ' . (string) ( $su['after']['pages']['wc_cart']['reason'] ?? 'missing' ) );
+wpc_check( 'cache ignoring query strings: the cart is never reported as working', array_key_exists( 'ok', $su['after']['pages']['wc_cart'] ?? array() ) && null === $su['after']['pages']['wc_cart']['ok'] && array_key_exists( 'ok', $su['baseline']['pages']['wc_cart'] ?? array() ) && null === $su['baseline']['pages']['wc_cart']['ok'], 'baseline: ' . (string) ( $su['baseline']['pages']['wc_cart']['reason'] ?? 'missing' ) . ' | after: ' . (string) ( $su['after']['pages']['wc_cart']['reason'] ?? 'missing' ) );
 wpc_check( '…it is logged as skipped (served from a cache), not as passed', false !== strpos( (string) ( $su['skipped']['wc_cart'] ?? '' ), 'cache' ) && false !== strpos( (string) ( $su['message'] ?? '' ), 'Not checked' ), (string) ( $su['skipped']['wc_cart'] ?? 'not logged' ) );
 delete_option( 'wpc_test_cache' );
 array_map( 'unlink', glob( get_temp_dir() . 'wpc-cache-*.html' ) ?: array() );
 
-echo "\n== Baseline already failing: page skipped and logged, never judged ==\n";
+wpc_guest_trace( 'Baseline already failing: page skipped and logged, never judged' ); echo "\n== Baseline already failing: page skipped and logged, never judged ==\n";
 wpc_addon_v1();
 wp_update_post( array( 'ID' => $checkout_id, 'post_password' => 'members-only' ) );
 $su = wpc_update_addon( '3.0' );
@@ -541,7 +564,7 @@ wpc_check( 'store switched to "coming soon" during the update: not mistaken for 
 update_option( 'woocommerce_coming_soon', 'no' );
 update_option( 'woocommerce_store_pages_only', 'no' );
 
-echo "\n== Classic (shortcode) checkout ==\n";
+wpc_guest_trace( 'Classic (shortcode) checkout' ); echo "\n== Classic (shortcode) checkout ==\n";
 $wpc_block_checkout = get_post_field( 'post_content', $checkout_id );
 $wpc_block_cart     = get_post_field( 'post_content', wc_get_page_id( 'cart' ) );
 wp_update_post( array( 'ID' => $checkout_id, 'post_content' => '<!-- wp:shortcode -->[woocommerce_checkout]<!-- /wp:shortcode -->' ) );
@@ -557,7 +580,7 @@ wp_update_post( array( 'ID' => wc_get_page_id( 'cart' ), 'post_content' => $wpc_
 $probe = SafeUpdates::probe();
 wpc_check( 'block checkout back (wp-block-woocommerce-checkout)', in_array( 'wp-block-woocommerce-checkout', (array) ( $probe['pages']['wc_checkout']['markers'] ?? array() ), true ) );
 
-echo "\n== Store data after every probe of this suite ==\n";
+wpc_guest_trace( 'Store data after every probe of this suite' ); echo "\n== Store data after every probe of this suite ==\n";
 // Probes are anonymous: a guest session would mean a probe stored data. The
 // suite itself also logs in as the admin and updates through admin-ajax.php,
 // where WooCommerce keeps a session for that logged-in user: not a probe's.
@@ -569,7 +592,7 @@ echo '      sessions: ' . wp_json_encode( $wpc_keys ) . "\n";
 wpc_check( 'no guest session was created by any probe', array() === $wpc_guests, wp_json_encode( $wpc_guests ) );
 wpc_check( 'no order or saved cart was created by any probe', array( $wpc_rows['orders'], $wpc_rows['carts'], $wpc_rows['hpos_orders'] ) === array( $store_before['orders'], $store_before['carts'], $store_before['hpos_orders'] ), wp_json_encode( $wpc_rows ) . ' vs ' . wp_json_encode( $store_before ) );
 
-echo "\n== A real order arrives before the break is detected ==\n";
+wpc_guest_trace( 'A real order arrives before the break is detected' ); echo "\n== A real order arrives before the break is detected ==\n";
 wpc_addon_v1();
 $GLOBALS['wpc_mails'] = array();
 $wpc_order_id         = 0;
@@ -597,7 +620,7 @@ if ( $wpc_order ) {
 }
 update_option( 'wpc_shop_db', 'v1' );
 
-echo "\n== Cleanup ==\n";
+wpc_guest_trace( 'Cleanup' ); echo "\n== Cleanup ==\n";
 @unlink( WPMU_PLUGIN_DIR . '/wpc-test-web.php' );
 @unlink( '/tmp/wpc-web-tests.on' );
 delete_option( 'wpc_test_mails' );

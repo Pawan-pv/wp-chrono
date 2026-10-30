@@ -35,11 +35,16 @@ api() { # method, route, [json]
     -H "X-WP-Nonce: $REST" -H "X-WP-Chrono-Nonce: $CHRONO" -H 'Content-Type: application/json' \
     ${3:+--data "$3"} "$BASE/?rest_route=/wp-chrono/v1/$2"
 }
+# The fixture updates over WP-CLI, whose opcache_invalidate() never reaches
+# PHP-FPM: on the prod stack the site runs the old code for up to
+# opcache.revalidate_freq (2 s) seconds. A fast machine (CI) gets there first.
+settle() { sleep 3; }
 json() { grep -o "\"$1\":\"\?[^,\"}]*" "$BODY" | head -1 | sed 's/.*:"\{0,1\}//'; }
 
 # ---------------------------------------------------------------------------
 echo "== Bad update #1: DB change + front-end fatal → undo over the REST API =="
 OUT="$(wpx wp --user=chrono eval-file /tests/rollback-fixture.php front 2>/dev/null)"
+settle
 SNAP="$(echo "$OUT" | field SNAP)"
 [ "$(echo "$OUT" | field UPGRADED)" = yes ] && [ "$(echo "$OUT" | field VERSION)" = 2.0 ]; check 'real Plugin_Upgrader updated wpc-bad 1.0 → 2.0' $?
 [ "$(echo "$OUT" | field ARCHIVES)" = 1 ] && [ "$SNAP" -gt 0 ]; check 'pre-update auto-snapshot holds the v1.0 folder archive' $? "#$SNAP"
@@ -75,6 +80,7 @@ C="$(api GET status)"; [ "$C" = 200 ]; check 'fresh nonces from the restore keep
 # ---------------------------------------------------------------------------
 echo; echo "== Bad update #2: DB change + fatal on EVERY request → undo from the ERS =="
 OUT="$(wpx wp --user=chrono eval-file /tests/rollback-fixture.php hard 2>/dev/null)"
+settle
 SNAP="$(echo "$OUT" | field SNAP)"
 [ "$(echo "$OUT" | field VERSION)" = 2.0 ] && [ "$(echo "$OUT" | field ARCHIVES)" = 1 ]; check 'wpc-bad updated again (v1.0 archived)' $? "#$SNAP"
 ERS="$(wpsafe --user=chrono chrono recovery generate --password="$ERS_PASS" --porcelain | tr -d '\r')"
