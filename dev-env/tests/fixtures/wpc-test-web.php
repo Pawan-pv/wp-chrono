@@ -60,8 +60,9 @@ add_filter(
 	2
 );
 
-// Diagnostics: which request stored a WooCommerce guest session (read by
-// wpc_guest_trace() in safe-update-woo-checks.php).
+// Which request stored a WooCommerce guest session: wpc-guest-origin.log for
+// wpc_guest_trace() (diagnostics), wpc-probe-session.log for Safe Updates
+// probes only (safe-update-woo-checks.php asserts it stays empty).
 add_action(
 	'shutdown',
 	static function () {
@@ -70,6 +71,9 @@ add_action(
 		}
 		$line = gmdate( 'H:i:s' ) . ' ' . ( $_SERVER['REQUEST_METHOD'] ?? 'CLI' ) . ' ' . ( $_SERVER['REQUEST_URI'] ?? '' ) . ' customer=' . WC()->session->get_customer_id() . "\n";
 		file_put_contents( get_temp_dir() . 'wpc-guest-origin.log', $line, FILE_APPEND );
+		if ( isset( $_GET['wpc_probe'] ) ) {
+			file_put_contents( get_temp_dir() . 'wpc-probe-session.log', $line, FILE_APPEND );
+		}
 	},
 	99
 );

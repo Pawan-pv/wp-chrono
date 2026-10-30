@@ -27,6 +27,8 @@ use WPChrono\Services\SnapshotService;
 
 wpc_guest_trace( 'Setup' ); echo "== Setup ==\n";
 $wpc_home = untrailingslashit( home_url() );
+@unlink( get_temp_dir() . 'wpc-probe-session.log' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors -- written by fixtures/wpc-test-web.php.
+@unlink( get_temp_dir() . 'wpc-guest-origin.log' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors
 // Dev stack: PHP runs as root, and WP-CLI refuses that without --allow-root.
 define( 'WPC_CLI_ROOT', function_exists( 'posix_geteuid' ) && 0 === posix_geteuid() ? ' --allow-root' : '' );
 add_filter( 'wp_chrono_safe_updates_probe_url', static function ( $url ) use ( $wpc_home ) {
@@ -594,13 +596,17 @@ wpc_guest_trace( 'Store data after every probe of this suite' ); echo "\n== Stor
 // Probes are anonymous: a guest session would mean a probe stored data. The
 // suite itself also logs in as the admin and updates through admin-ajax.php,
 // where WooCommerce keeps a session for that logged-in user: not a probe's.
+// The table alone can't tell who wrote a row (the simulated remote-management
+// worker leaves a guest row too), so the fixture logs every anonymous request
+// carrying a probe token that stored a session (fixtures/wpc-test-web.php).
+// Saved carts are usermeta of logged-in users: the suite's own admin visits.
 global $wpdb;
-$wpc_keys   = $wpdb->get_col( "SELECT session_key FROM {$wpdb->prefix}woocommerce_sessions" );
-$wpc_guests = array_values( array_filter( $wpc_keys, static function ( $k ) { return ! ( ctype_digit( (string) $k ) && get_userdata( (int) $k ) ); } ) );
-$wpc_rows   = wpc_store_rows();
-echo '      sessions: ' . wp_json_encode( $wpc_keys ) . "\n";
-wpc_check( 'no guest session was created by any probe', array() === $wpc_guests, wp_json_encode( $wpc_guests ) );
-wpc_check( 'no order or saved cart was created by any probe', array( $wpc_rows['orders'], $wpc_rows['carts'], $wpc_rows['hpos_orders'] ) === array( $store_before['orders'], $store_before['carts'], $store_before['hpos_orders'] ), wp_json_encode( $wpc_rows ) . ' vs ' . wp_json_encode( $store_before ) );
+$wpc_keys  = $wpdb->get_col( "SELECT session_key FROM {$wpdb->prefix}woocommerce_sessions" );
+$wpc_rows  = wpc_store_rows();
+$wpc_probe = trim( (string) @file_get_contents( get_temp_dir() . 'wpc-probe-session.log' ) ); // phpcs:ignore WordPress.PHP.NoSilencedErrors -- absent = none.
+echo '      sessions in the table: ' . wp_json_encode( $wpc_keys ) . "\n";
+wpc_check( 'no guest session was created by any probe', '' === $wpc_probe, '' === $wpc_probe ? 'no probe request stored a session' : $wpc_probe );
+wpc_check( 'no order was created by any probe', array( $wpc_rows['orders'], $wpc_rows['hpos_orders'] ) === array( $store_before['orders'], $store_before['hpos_orders'] ), wp_json_encode( $wpc_rows ) . ' vs ' . wp_json_encode( $store_before ) );
 
 wpc_guest_trace( 'A real order arrives before the break is detected' ); echo "\n== A real order arrives before the break is detected ==\n";
 wpc_addon_v1();

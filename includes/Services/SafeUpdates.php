@@ -67,6 +67,10 @@ final class SafeUpdates {
 		add_action( '_core_updated_successfully', array( self::class, 'after_core_update' ), 5 );
 		add_action( 'automatic_updates_complete', array( self::class, 'after_auto_updates' ) );
 		add_action( 'activated_plugin', array( self::class, 'after_reactivation' ) );
+		// wp-admin/update.php reactivates SILENTLY (activate_plugin( …, true )): no
+		// activated_plugin there, but the active plugins option still changes.
+		add_action( 'update_option_active_plugins', array( self::class, 'after_active_plugins_change' ), 10, 2 );
+		add_action( 'update_site_option_active_sitewide_plugins', array( self::class, 'after_sitewide_plugins_change' ), 10, 3 );
 		add_filter( 'auto_update_plugin', array( self::class, 'allow_auto_update' ), 20, 2 );
 		add_filter( 'auto_update_theme', array( self::class, 'allow_auto_update' ), 20, 2 );
 		add_filter( 'auto_update_core', array( self::class, 'allow_auto_update' ), 20, 2 );
@@ -446,6 +450,36 @@ final class SafeUpdates {
 		if ( in_array( $outcome['status'], array( 'undone', 'undo_failed' ), true ) && function_exists( 'show_message' ) ) {
 			show_message( '<strong>' . esc_html( (string) $outcome['message'] ) . '</strong>' );
 		}
+	}
+
+	/**
+	 * `update_option_active_plugins`: a plugin newly active resumes its deferred
+	 * check. Covers the silent reactivation in wp-admin/update.php, which fires
+	 * no activated_plugin. after_reactivation() clears `pending` first, so the
+	 * activated_plugin call that follows a normal activation is a no-op.
+	 *
+	 * @param mixed $old Previous active plugins.
+	 * @param mixed $new New active plugins.
+	 */
+	public static function after_active_plugins_change( $old, $new ): void {
+		if ( empty( self::state()['pending'] ) ) {
+			return;
+		}
+		foreach ( array_diff( (array) $new, (array) $old ) as $plugin ) {
+			self::after_reactivation( (string) $plugin );
+		}
+	}
+
+	/**
+	 * `update_site_option_active_sitewide_plugins`: the same for network-wide
+	 * reactivation (plugin basenames are the array keys).
+	 *
+	 * @param string $option Option name.
+	 * @param mixed  $new    New value.
+	 * @param mixed  $old    Previous value.
+	 */
+	public static function after_sitewide_plugins_change( $option, $new, $old ): void {
+		self::after_active_plugins_change( array_keys( (array) $old ), array_keys( (array) $new ) );
 	}
 
 	/**
