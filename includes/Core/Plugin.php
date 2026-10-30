@@ -42,6 +42,7 @@ final class Plugin {
 		if ( is_admin() ) {
 			( new Admin() )->register();
 			add_action( 'admin_init', array( Installer::class, 'maybe_upgrade' ) );
+			add_action( 'admin_notices', array( SnapshotService::class, 'admin_notice' ) );
 		}
 
 		// `rest_api_init` only fires while serving a REST request.
