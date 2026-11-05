@@ -55,6 +55,13 @@ function adoptNonces(nonces: { rest: string; chrono: string } | null) {
   config.chronoNonce = nonces.chrono;
 }
 
+/** Fetch fresh nonces from the server (needed after a full reset wipes nonces). */
+export async function refreshConfig(): Promise<void> {
+  const fresh = await api<{ rest: string; chrono: string }>('nonce');
+  config.restNonce = fresh.rest;
+  config.chronoNonce = fresh.chrono;
+}
+
 /** Runs build ticks until the snapshot is ready, reporting table progress. */
 export async function buildSnapshot(id: number, r: Reporter, label = `Snapshot #${id}`): Promise<Snapshot> {
   let lastTable = '';
@@ -176,6 +183,11 @@ export function blueprintPlan(blueprint: Blueprint): ResetPlan {
       });
       reset.steps.forEach((s) => r.log(`${String(s.ms).padStart(6)} ms  ${s.label}`));
       adoptNonces(reset.nonces);
+      // After a full reset the WordPress nonce keys are regenerated. The nonces
+      // returned by reset/full should be fresh, but re-fetch via the nonce
+      // endpoint (which only needs the WordPress REST nonce, not the chrono
+      // nonce) to be sure the SPA's next request isn't rejected.
+      await refreshConfig();
       r.step('reset', 'done');
 
       r.step('apply', 'running');

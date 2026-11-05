@@ -79,13 +79,22 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
     signal: options.signal,
   });
 
-  const payload = await response.json().catch(() => null);
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    // Empty or non-JSON body (e.g. server returned HTTP 200 with no body).
+    payload = null;
+  }
   if (!response.ok) {
     throw new ApiError(
       payload?.message ?? `Request failed with status ${response.status}`,
       response.status,
       payload?.code,
     );
+  }
+  if (payload === null || payload === undefined) {
+    throw new ApiError(`Server returned an empty response for ${path}.`, response.status);
   }
   return payload as T;
 }

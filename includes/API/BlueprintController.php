@@ -126,6 +126,34 @@ final class BlueprintController extends RestController {
 				),
 			)
 		);
+		$this->route(
+			'/blueprints/(?P<id>[a-z0-9]{8})/apply',
+			array(
+				array(
+					'methods'  => WP_REST_Server::CREATABLE,
+					'callback' => array( $this, 'apply' ),
+					'args'     => $id + array(
+						'step'    => array( 'type' => 'integer', 'default' => 0, 'minimum' => 0 ),
+						'confirm' => array( 'type' => 'string', 'default' => '' ),
+					),
+				),
+			)
+		);
+
+		// Nonce refresh: lets the SPA get fresh credentials after a full reset,
+		// when the X-WP-Chrono-Nonce may be stale. Only requires manage_options
+		// and the standard WordPress REST nonce (X-WP-Nonce), never X-WP-Chrono-Nonce.
+		register_rest_route(
+			self::NAMESPACE,
+			'/nonce',
+			array(
+				array(
+					'methods'             => WP_REST_Server::READABLE,
+					'callback'            => array( $this, 'nonce' ),
+					'permission_callback' => array( $this, 'authorize_nonce' ),
+				),
+			)
+		);
 	}
 
 	public function index(): \WP_REST_Response {
@@ -230,6 +258,42 @@ final class BlueprintController extends RestController {
 		}
 		$result = $this->service->apply_step( (string) $request['id'], (int) $request['step'] );
 		return is_wp_error( $result ) ? $result : $this->ok( $result );
+	}
+
+	/**
+	 * Fresh nonces for the SPA after a full reset. Only requires manage_options
+	 * and the standard WordPress REST nonce (X-WP-Nonce), never X-WP-Chrono-Nonce,
+	 * so it can be called when the chrono nonce is stale.
+	 *
+	 * @return \WP_REST_Response
+	 */
+	public function nonce( WP_REST_Request $request ): \WP_REST_Response {
+		return $this->ok( array(
+			'rest'   => wp_create_nonce( 'wp_rest' ),
+			'chrono' => wp_create_nonce( self::NONCE_ACTION ),
+		) );
+	}
+
+	/**
+	 * @return true|WP_Error
+	 */
+	public function authorize_nonce( WP_REST_Request $request ) {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return new WP_Error(
+				'wp_chrono_forbidden',
+				__( 'You are not allowed to use WP Chrono.', 'wp-chrono' ),
+				array( 'status' => rest_authorization_required_code() )
+			);
+		}
+		$nonce = $request->get_header( 'X-WP-Nonce' );
+		if ( ! is_string( $nonce ) || ! wp_verify_nonce( $nonce, 'wp_rest' ) ) {
+			return new WP_Error(
+				'wp_chrono_invalid_nonce',
+				__( 'Your session has expired. Reload the page and try again.', 'wp-chrono' ),
+				array( 'status' => 403 )
+			);
+		}
+		return true;
 	}
 
 	private function require_code_caps(): ?WP_Error {
