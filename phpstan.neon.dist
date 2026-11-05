@@ -1,0 +1,27 @@
+includes:
+    - vendor/szepeviktor/phpstan-wordpress/extension.neon
+
+parameters:
+    level: 5
+    paths:
+        - includes
+    tmpDir: .phpstan-cache
+    reportUnmatchedIgnoredErrors: false
+    # WordPress core is provided by the stubs above; do not fail on dynamic properties.
+    treatPhpDocTypesAsCertain: false
+    bootstrapFiles:
+        - tests/phpstan/bootstrap.php
+    scanFiles:
+        - vendor/php-stubs/wp-cli-stubs/wp-cli-stubs.php
+        - vendor/php-stubs/wp-cli-stubs/wp-cli-tools-stubs.php
+    ignoreErrors:
+        # PclZip's create() / extract() take variadic option pairs (func_get_args); the stubs declare fewer parameters.
+        - '#^Method PclZip::(create|extract)\(\) invoked with \d+ parameters#'
+        # blog_public is restored as stored: private multisite networks use -1 / -2, which a bool would lose.
+        -
+            message: '#^Parameter \#4 \$is_public of function wp_install expects bool, int given\.$#'
+            path: includes/Services/ResetService.php
+        # Injected for the snapshot engine's lifetime; kept so the constructor stays stable for callers.
+        -
+            message: '#^Property WPChrono\\Services\\Snapshot\\Scavenger::\$snapshots is never read, only written\.$#'
+            path: includes/Services/Snapshot/Scavenger.php

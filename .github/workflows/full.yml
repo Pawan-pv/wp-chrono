@@ -62,7 +62,7 @@ jobs:
             wp: wordpress.tar.gz
             suites: ^(license-checks|upgrader-checks|rollback-checks|update-rollback-checks|safe-update-checks|safe-update-woo-checks|core-update-checks|scheduled-checks)
           - group: data
-            suites: ^(license-checks|rest-checks|http-checks|snapshot-checks|stress-checks|safety-checks|multisite-checks|blueprint-checks|cloud-checks|import-checks|import-validation-checks|recovery-checks)
+            suites: ^(license-checks|rest-checks|http-checks|snapshot-checks|stress-checks|safety-checks|multisite-checks|blueprint-checks|cloud-checks|contract-checks|import-checks|import-validation-checks|recovery-checks)
           - group: ui-release
             suites: ^(TypeScript typecheck|Production build|PHP 8\.3 lint|PHP 7\.4 lint|license-checks|ui-e2e-checks|CLI commands|release-checks|update-checks)
     uses: ./.github/workflows/suites.yml

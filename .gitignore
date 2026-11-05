@@ -3,6 +3,10 @@ vendor/
 build/
 dist/
 *.map
+.phpstan-cache/
+playwright-report/
+test-results/
+opencode.json
 .DS_Store
 Thumbs.db
 *.secret
