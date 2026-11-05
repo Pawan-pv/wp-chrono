@@ -547,7 +547,16 @@ async function run() {
   await page.type('300');
   await page.screenshot('25a-settings-open');
   await page.eval(() => (window.__wpcBeforeSave = 1));
-  const saveBox = await page.click('Save settings', { scope: '[data-e2e="settings-dialog"]' });
+  // Click the Save button via its element (not screen coordinates) so the click
+  // lands on the button itself even when it sits at the bottom edge of the
+  // dialog, where CDP mouse events can land on the Radix overlay and close it.
+  const saveBox = await page.eval(() => {
+    const btn = document.querySelector('[data-e2e="settings-save"]');
+    if (!btn) throw new Error('Save settings button not found');
+    btn.click();
+    const r = btn.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  });
   await page.screenshot('25b-settings-after-click');
   try {
     await page.waitFor(() => /Settings saved/.test(document.querySelector('[data-e2e="settings-message"]')?.innerText ?? ''), [], 10000, 'settings saved');
