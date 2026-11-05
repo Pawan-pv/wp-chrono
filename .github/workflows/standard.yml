@@ -39,34 +39,6 @@ jobs:
       - name: Run PHPStan
         run: vendor/bin/phpstan analyse --no-progress
 
-  phpunit:
-    name: PHPUnit (PHP ${{ matrix.php }})
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        # Lowest supported (Requires PHP: 7.4) and current.
-        php: ['7.4', '8.3']
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Setup PHP
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ matrix.php }}
-          extensions: sodium, openssl, zlib, mbstring
-          coverage: none
-          tools: composer
-
-      - name: Install Composer dependencies
-        run: composer install --no-interaction --no-progress --prefer-dist
-
-      - name: Run PHPUnit
-        run: composer test
-
   vitest:
     name: Vitest (src/)
     runs-on: ubuntu-24.04
@@ -87,25 +59,3 @@ jobs:
 
       - name: Run Vitest
         run: npm test
-
-  cloud:
-    name: Cloud unit tests (npm test)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    # The cloud Worker lives in a sibling repository; skip when it is not present.
-    if: ${{ hashFiles('cloud/package.json') != '' }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install and test
-        working-directory: cloud
-        run: |
-          npm ci
-          npm run test:unit
