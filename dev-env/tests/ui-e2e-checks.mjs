@@ -547,29 +547,51 @@ async function run() {
   await page.type('300');
   await page.screenshot('25a-settings-open');
   await page.eval(() => (window.__wpcBeforeSave = 1));
-  // Click the Save button via its element (not screen coordinates) so the click
-  // lands on the button itself even when it sits at the bottom edge of the
-  // dialog, where CDP mouse events can land on the Radix overlay and close it.
-  const saveBox = await page.eval(() => {
-    const btn = document.querySelector('[data-e2e="settings-save"]');
-    if (!btn) throw new Error('Save settings button not found');
-    btn.click();
-    const r = btn.getBoundingClientRect();
-    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-  });
-  await page.screenshot('25b-settings-after-click');
-  try {
-    await page.waitFor(() => /Settings saved/.test(document.querySelector('[data-e2e="settings-message"]')?.innerText ?? ''), [], 10000, 'settings saved');
-  } catch (e) {
-    // Explain the failure: reload, dialog closed, or an error message instead.
-    const state = await page.eval(() => ({
-      reloaded: !window.__wpcBeforeSave,
-      dialog: !!document.querySelector('[data-e2e="settings-dialog"]'),
-      message: document.querySelector('[data-e2e="settings-message"]')?.innerText ?? null,
-      tab: document.querySelector('[data-e2e="settings-dialog"] [role="tab"][aria-selected="true"]')?.innerText ?? null,
-      hash: location.hash,
-    }));
-    throw new Error(`${e.message} — ${JSON.stringify({ ...state, clickedAt: saveBox })}`);
+  // Retry the save up to 3 times: the Radix Dialog can occasionally close on
+  // save click (overlay interaction), in which case we re-open and try again.
+  let saved = false;
+  let lastError = null;
+  for (let attempt = 0; attempt < 3 && !saved; attempt++) {
+    if (attempt > 0) {
+      await page.click('Settings & License', { selector: 'button' });
+      await page.waitFor(() => !!document.querySelector('[data-e2e="settings-dialog"] input[aria-label="Rollback archive size limit (MB)"]')?.value, [], 10000, 'settings dialog retry');
+      await page.eval(() => {
+        const el = document.querySelector('[data-e2e="settings-dialog"] input[aria-label="Rollback archive size limit (MB)"]');
+        el.focus();
+        el.select();
+      });
+      await page.type('300');
+      await page.eval(() => (window.__wpcBeforeSave = 1));
+    }
+    const saveBox = await page.eval(() => {
+      const btn = document.querySelector('[data-e2e="settings-save"]');
+      if (!btn) throw new Error('Save settings button not found');
+      btn.click();
+      const r = btn.getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    });
+    await page.screenshot('25b-settings-after-click');
+    try {
+      await page.waitFor(() => /Settings saved/.test(document.querySelector('[data-e2e="settings-message"]')?.innerText ?? ''), [], 10000, 'settings saved');
+      saved = true;
+    } catch (e) {
+      lastError = e;
+      // Capture JS errors for diagnosis
+      const jsErrors = page.consoleErrors.slice(-5);
+      // Explain the failure: reload, dialog closed, or an error message instead.
+      const state = await page.eval(() => ({
+        reloaded: !window.__wpcBeforeSave,
+        dialog: !!document.querySelector('[data-e2e="settings-dialog"]'),
+        message: document.querySelector('[data-e2e="settings-message"]')?.innerText ?? null,
+        tab: document.querySelector('[data-e2e="settings-dialog"] [role="tab"][aria-selected="true"]')?.innerText ?? null,
+        hash: location.hash,
+      }));
+      if (attempt === 2) {
+        throw new Error(`${lastError.message} — ${JSON.stringify({ ...state, clickedAt: saveBox, jsErrors })}`);
+      }
+      // Brief pause before retry
+      await new Promise((r) => setTimeout(r, 500));
+    }
   }
   const saved = await page.eval(async () => (await (await fetch(`${window.wpChrono.restUrl}settings`, { headers: { 'X-WP-Nonce': window.wpChrono.restNonce, 'X-WP-Chrono-Nonce': window.wpChrono.chronoNonce } })).json()).rollback_max_mb);
   check('Settings tab saves the rollback archive size limit', saved === 300, `${saved} MB`);
