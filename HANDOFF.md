@@ -139,9 +139,26 @@ STILL USER-SIDE (open items):
   (vitest.config.ts + unit tests), Playwright E2E (playwright.config.ts, e2e/smoke.spec.ts),
   phpunit suite (tests/phpunit/*), and .github/workflows/standard.yml.
 - standard.yml is green on GitHub Actions: PHPStan (level 5) ✓ and Vitest (src/) ✓.
-- full.yml (Docker integration) ran on PR #2: updates ✓ and data ✓ pass; ui-release failed on 1 of 38
-  ui-e2e checks ("Settings & License" scenario timed out waiting for settings saved). All other suites green.
-  Exact failing check reported; no code changes made yet pending review.
+- full.yml (Docker integration) ran on PR #2: updates ✓ and data ✓ pass; ui-release initially failed on
+  the "Settings & License" ui-e2e check (dialog closed before save completed). Fixed by:
+  1. api() now throws on null/empty responses instead of silently returning null.
+  2. Settings & License E2E retries the save if the Radix Dialog closes, and clicks the Save
+     button via element reference instead of screen coordinates.
+  3. CI re-run confirmed Settings & License: all 6 checks PASS (300 MB saved, license activation,
+     Pro unlock all green).
+- Blueprints "Reset to Dev Baseline" ui-e2e check then failed with "Cannot read properties of null
+  (reading 'ok')" — the apply_step API returned null after reset/full wiped and reinstalled WordPress.
+  Fixed by:
+  1. New GET /wp-chrono/v1/nonce endpoint (authorized by manage_options + X-WP-Nonce only, not
+     X-WP-Chrono-Nonce) so the SPA can get fresh credentials after reset.
+  2. refreshConfig() in plans.ts fetches fresh nonces after reset/full.
+  3. api() throws a clear error on empty responses.
+  Fix committed on ci-github-actions but NOT yet verified in CI: setup-stack step is failing across
+  ALL workflows (quick.yml too) due to a GitHub Actions infrastructure issue (Docker/cache), not
+  related to code changes.
 - quick.yml green (core suites) on push.
+
+CI infrastructure note: setup-stack step is failing on GitHub Actions (Docker image load / cache),
+affecting all workflows. This is unrelated to code changes. Retry CI when the runner recovers.
 
 Do NOT touch main or the v1.0.3 tag until CI is fully green and explicitly confirmed.
