@@ -126,19 +126,6 @@ final class BlueprintController extends RestController {
 				),
 			)
 		);
-		$this->route(
-			'/blueprints/(?P<id>[a-z0-9]{8})/apply',
-			array(
-				array(
-					'methods'  => WP_REST_Server::CREATABLE,
-					'callback' => array( $this, 'apply' ),
-					'args'     => $id + array(
-						'step'    => array( 'type' => 'integer', 'default' => 0, 'minimum' => 0 ),
-						'confirm' => array( 'type' => 'string', 'default' => '' ),
-					),
-				),
-			)
-		);
 
 		// Nonce refresh: lets the SPA get fresh credentials after a full reset,
 		// when the X-WP-Chrono-Nonce may be stale. Only requires manage_options
