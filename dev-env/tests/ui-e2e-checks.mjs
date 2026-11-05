@@ -549,9 +549,9 @@ async function run() {
   await page.eval(() => (window.__wpcBeforeSave = 1));
   // Retry the save up to 3 times: the Radix Dialog can occasionally close on
   // save click (overlay interaction), in which case we re-open and try again.
-  let saved = false;
+  let settingsSaved = false;
   let lastError = null;
-  for (let attempt = 0; attempt < 3 && !saved; attempt++) {
+  for (let attempt = 0; attempt < 3 && !settingsSaved; attempt++) {
     if (attempt > 0) {
       await page.click('Settings & License', { selector: 'button' });
       await page.waitFor(() => !!document.querySelector('[data-e2e="settings-dialog"] input[aria-label="Rollback archive size limit (MB)"]')?.value, [], 10000, 'settings dialog retry');
@@ -573,7 +573,7 @@ async function run() {
     await page.screenshot('25b-settings-after-click');
     try {
       await page.waitFor(() => /Settings saved/.test(document.querySelector('[data-e2e="settings-message"]')?.innerText ?? ''), [], 10000, 'settings saved');
-      saved = true;
+      settingsSaved = true;
     } catch (e) {
       lastError = e;
       // Capture JS errors for diagnosis
