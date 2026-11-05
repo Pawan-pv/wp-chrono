@@ -250,7 +250,7 @@ export function SettingsDialog({ open, onOpenChange, tab, onTabChange }: Setting
               />
             </label>
             <div className="flex justify-end">
-              <Button type="submit" size="sm" disabled={!settings || busy === 'settings'}>
+              <Button type="submit" size="sm" disabled={!settings || busy === 'settings'} data-e2e="settings-save">
                 {busy === 'settings' ? <Loader2 className="animate-spin" /> : <Save />}
                 Save settings
               </Button>
