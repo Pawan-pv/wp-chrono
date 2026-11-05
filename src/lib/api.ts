@@ -24,7 +24,7 @@ interface RequestOptions {
  * Builds an endpoint URL. Handles both pretty permalinks (/wp-json/…) and
  * plain permalinks (?rest_route=/…), where query params must join with `&`.
  */
-function endpoint(path: string, query?: Query): string {
+export function endpoint(path: string, query?: Query): string {
   let url = config.restUrl + path.replace(/^\/+/, '');
   if (query) {
     const params = new URLSearchParams();

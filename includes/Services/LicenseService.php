@@ -58,6 +58,7 @@ final class LicenseService {
 	const BLOCKING = array(
 		'revoked'    => 'This license was revoked by the license server.',
 		'site_limit' => 'This license key is already active on its maximum number of sites. Deactivate it on another site (Settings → License), then check again.',
+		'expired'    => 'This yearly license has lapsed, so Pro features are off. Nothing was deleted and every restore still works. Renew the plan and Pro switches back on with the same key.',
 	);
 
 	// ---------------------------------------------------------------------
@@ -97,6 +98,8 @@ final class LicenseService {
 			'source'  => sanitize_key( (string) ( $data['source'] ?? 'direct' ) ),
 			'issued'  => sanitize_text_field( (string) ( $data['issued'] ?? '' ) ),
 			'expires' => empty( $data['expires'] ) ? null : sanitize_text_field( (string) $data['expires'] ),
+			// Keys sold through the store say yearly / lifetime; a yearly key's paid period lives on the license server.
+			'term'    => in_array( $data['term'] ?? null, array( 'yearly', 'lifetime' ), true ) ? $data['term'] : null,
 		);
 	}
 
@@ -186,7 +189,17 @@ final class LicenseService {
 			'free'     => array( 'resets', 'snapshots', 'auto_snapshots', 'restore', 'full_undo', 'import', 'cloud_pull', 'recovery_script' ),
 			'server'   => self::server(),
 			'remote'   => $saved['remote'] ?? null,
+			'pricing'  => self::pricing_url(),
 		);
+	}
+
+	/**
+	 * The store's pricing page (served by the same API as updates), or '' when
+	 * the site has no API configured.
+	 */
+	public static function pricing_url(): string {
+		$api = Updater::api();
+		return '' === $api ? '' : esc_url_raw( $api . '/pricing' );
 	}
 
 	public static function can( string $feature ): bool {
@@ -234,7 +247,7 @@ final class LicenseService {
 			}
 			if ( ! is_wp_error( $remote ) && 'active' !== $remote['status'] ) {
 				update_option( self::OPTION, array_diff_key( $saved, array( 'key' => 1 ) ), false );
-				$why = 'site_limit' === $remote['status'] ? ' ' . self::BLOCKING['site_limit'] : '';
+				$why = isset( self::BLOCKING[ $remote['status'] ] ) && 'revoked' !== $remote['status'] ? ' ' . self::BLOCKING[ $remote['status'] ] : '';
 				return new WP_Error( 'wp_chrono_license_revoked', 'The license server rejected this key (status: ' . $remote['status'] . ').' . $why, array( 'status' => 400 ) );
 			}
 			// The activation call counts as today's check.

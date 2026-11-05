@@ -290,7 +290,7 @@ final class Importer {
 
 	/**
 	 * @param array<string,mixed> $state
-	 * @return true|WP_Error
+	 * @return true
 	 */
 	private function finish( array $state ) {
 		global $wpdb;
@@ -329,20 +329,47 @@ final class Importer {
 	// ---------------------------------------------------------------------
 
 	/**
-	 * Replaces every quoted literal with `S` and every backtick identifier
-	 * with `I`, so keyword checks can't be fooled by text inside values.
-	 * Null when a quote is never closed.
+	 * Replaces every quoted literal with `S`, every backtick identifier with
+	 * `I` and every comment with `#`, so keyword checks can't be fooled by
+	 * text inside values — nor by quotes inside comments, which the server
+	 * skips but a quote-only scan would take as the start of a literal.
+	 * A `#` in the result therefore always marks a comment. Null when a
+	 * quote or block comment is never closed.
 	 */
 	public static function mask_literals( string $sql ): ?string {
 		$out = '';
 		$i   = 0;
 		$n   = strlen( $sql );
 		while ( $i < $n ) {
-			$len  = strcspn( $sql, "'\"`", $i );
+			$len  = strcspn( $sql, "'\"`#-/", $i );
 			$out .= substr( $sql, $i, $len );
 			$i   += $len;
 			if ( $i >= $n ) {
 				break;
+			}
+			$char = $sql[ $i ];
+			$next = $sql[ $i + 1 ] ?? '';
+			// `# …` and `-- …` (MySQL needs whitespace after the dashes) run to the end of the line.
+			if ( '#' === $char || ( '-' === $char && '-' === $next && ( $i + 2 >= $n || ctype_space( $sql[ $i + 2 ] ) || ctype_cntrl( $sql[ $i + 2 ] ) ) ) ) {
+				$eol  = strpos( $sql, "\n", $i );
+				$i    = false === $eol ? $n : $eol;
+				$out .= '#';
+				continue;
+			}
+			// `/* … */`, including executable `/*! … */` comments.
+			if ( '/' === $char && '*' === $next ) {
+				$end = strpos( $sql, '*/', $i + 2 );
+				if ( false === $end ) {
+					return null;
+				}
+				$i    = $end + 2;
+				$out .= '#';
+				continue;
+			}
+			if ( '-' === $char || '/' === $char ) {
+				$out .= $char;
+				$i++;
+				continue;
 			}
 			$quote = $sql[ $i++ ];
 			$stops = '`' === $quote ? '`' : $quote . '\\';
@@ -371,9 +398,13 @@ final class Importer {
 	 * Why a CREATE TABLE is refused, or null when it is a plain table definition.
 	 */
 	public static function refuse_create( string $sql ): ?string {
-		$masked = self::mask_literals( $sql );
+		// MariaDB with show_old_temporals tags old DATETIME columns this way; the only comment SHOW CREATE TABLE prints.
+		$masked = self::mask_literals( str_replace( ' /* mariadb-5.3 */', ' ', $sql ) );
 		if ( null === $masked || ! preg_match( '/^CREATE TABLE I \(/', $masked ) ) {
 			return 'malformed statement';
+		}
+		if ( false !== strpos( $masked, '#' ) ) {
+			return 'comments are not allowed';
 		}
 		$depth = 0;
 		$close = -1;
@@ -396,8 +427,12 @@ final class Importer {
 		if ( preg_match( '/\b(SELECT|LIKE|AS|UNION|DIRECTORY|CONNECTION|INSERT_METHOD|TABLESPACE|IGNORE|REPLACE)\b/i', $tail, $m ) ) {
 			return strtoupper( $m[1] ) . ' is not allowed after the column list';
 		}
-		if ( preg_match( '/\bENGINE\s*=\s*(\w+)/i', $tail, $m ) && ! in_array( strtolower( $m[1] ), array( 'innodb', 'myisam', 'aria', 'memory', 'heap' ), true ) ) {
-			return "storage engine {$m[1]} is not allowed";
+		// `=` is optional and the last ENGINE wins, so every one must be allowed.
+		preg_match_all( '/\bENGINE\s*=?\s*(\w+)/i', $tail, $engines );
+		foreach ( $engines[1] as $engine ) {
+			if ( ! in_array( strtolower( $engine ), array( 'innodb', 'myisam', 'aria', 'memory', 'heap' ), true ) ) {
+				return "storage engine {$engine} is not allowed";
+			}
 		}
 		return null;
 	}

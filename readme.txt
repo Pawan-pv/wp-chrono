@@ -11,7 +11,7 @@ Undo plugin updates (files + database), reset safely, and recover a crashed site
 
 == Description ==
 
-WP Chrono is a time machine for your WordPress database and the plugins you update. It takes a snapshot before every update, lets you undo the update — code *and* data — in one click, and gives you an Emergency Recovery Script that still works when a fatal error has taken the whole site down.
+WP Chrono is a time machine for your WordPress database and the plugins, themes and core files you update. It is not a full-site backup (media uploads are not included), so keep your backup plugin. It takes a snapshot before every update, lets you undo the update — code *and* data — in one click, and gives you an Emergency Recovery Script that still works when a fatal error has taken the whole site down.
 
 **Restoring is always free.** Snapshots, every kind of restore, importing your own backups and the recovery script are never behind a paywall.
 
@@ -26,7 +26,7 @@ WP Chrono is a time machine for your WordPress database and the plugins you upda
 
 * After every update — from wp-admin, WP-CLI or WordPress's background auto-updates — WP Chrono loads your home page (and wp-admin) the way WordPress itself checks for fatal errors.
 * If the update broke a page that worked before, it is **undone automatically: files and database**, from the snapshot taken seconds earlier. You get an email and an admin notice naming the plugin and the error.
-* That exact version is then never auto-updated again (a newer one is). WordPress's own auto-update rollback only restores plugin files, and only for auto-updates.
+* That exact version is then never auto-updated again (a newer one is). WordPress itself only puts back the old plugin files, and only when the install fails or an auto-update causes a fatal error — it never touches the database.
 * It never guesses: if your host blocks the check, nothing is undone and the snapshot says "Update not checked". Free, on by default; turn it off under Settings.
 
 = Snapshots with atomic restore =
@@ -60,9 +60,9 @@ Protected with bcrypt, signed session cookies, CSRF tokens and brute-force locko
 = Pro: Blueprints & Cloud =
 
 * **Blueprints** — capture a site's plugins, theme and baseline settings (optionally with local zips, for premium plugins and offline use), share them as JSON, and **Reset to Dev Baseline** in one click.
-* **Cloud offload** — push snapshots and update archives to your own Cloudflare R2, Amazon S3 or Backblaze B2 bucket (AWS Signature v4, no SDK, secret key encrypted at rest).
+* **Cloud offload** — push snapshots and update archives to your own Cloudflare R2, Amazon S3 or Backblaze B2 bucket (AWS Signature v4, no SDK, secret key encrypted at rest). Beta: tested against an S3-compatible test server; please report any provider that misbehaves.
 
-Pro keys are verified offline — no account and no license server needed.
+Pro keys are verified offline, so no account is needed. By default the site checks in once a day to count the sites a key is used on (see Privacy); define `WP_CHRONO_LICENSE_SERVER` as `''` to switch that off.
 
 = For developers =
 

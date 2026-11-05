@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BadgeCheck, Check, KeyRound, Loader2, Lock, Save } from 'lucide-react';
+import { BadgeCheck, Check, ExternalLink, KeyRound, Loader2, Lock, Save } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
@@ -270,7 +270,7 @@ export function SettingsDialog({ open, onOpenChange, tab, onTabChange }: Setting
                 </span>
                 <span className="text-xs text-muted-foreground">
                   {license?.active
-                    ? `${license.masked} · ${license.license?.source} · ${license.license?.expires ? `until ${license.license.expires}` : 'lifetime'}${license.from === 'constant' ? ' · set in wp-config.php' : ''}`
+                    ? `${license.masked} · ${license.license?.source} · ${license.license?.expires ? `until ${license.license.expires}` : license.license?.term === 'yearly' ? 'yearly plan' : 'lifetime'}${license.from === 'constant' ? ' · set in wp-config.php' : ''}`
                     : license?.error ?? 'No license key — every restore feature is still free.'}
                 </span>
               </span>
@@ -290,6 +290,14 @@ export function SettingsDialog({ open, onOpenChange, tab, onTabChange }: Setting
                   <Input value={key} onChange={(e) => setKey(e.target.value)} placeholder="WPC1.…" spellCheck={false} autoComplete="off" className="font-mono text-xs" />
                 </label>
                 <div className="flex justify-end gap-2">
+                  {!license?.active && license?.pricing && (
+                    <Button asChild variant="outline" size="sm">
+                      <a href={license.pricing} target="_blank" rel="noopener noreferrer" data-e2e="license-pricing">
+                        <ExternalLink />
+                        See plans
+                      </a>
+                    </Button>
+                  )}
                   {license?.active && (
                     <Button type="button" variant="outline" size="sm" onClick={deactivate} disabled={busy !== null}>
                       Deactivate

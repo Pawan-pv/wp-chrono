@@ -6,7 +6,7 @@ const EVENT = 'wpchrono:license';
 
 /** Broadcasts a new license state (after activate / deactivate) to every view. */
 export function publishLicense(status: LicenseStatus) {
-  config.license = { active: status.active, plan: status.plan, features: status.features };
+  config.license = { active: status.active, plan: status.plan, features: status.features, pricing: status.pricing };
   window.dispatchEvent(new CustomEvent(EVENT));
 }
 

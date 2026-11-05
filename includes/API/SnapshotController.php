@@ -268,8 +268,15 @@ final class SnapshotController extends RestController {
 	 * @return \WP_REST_Response|WP_Error
 	 */
 	public function import_chunk( WP_REST_Request $request ) {
-		$file = $request->get_file_params()['chunk'] ?? null;
-		if ( ! is_array( $file ) || UPLOAD_ERR_OK !== (int) ( $file['error'] ?? UPLOAD_ERR_NO_FILE ) || ! is_uploaded_file( (string) $file['tmp_name'] ) ) {
+		$file  = $request->get_file_params()['chunk'] ?? null;
+		$error = is_array( $file ) ? (int) ( $file['error'] ?? UPLOAD_ERR_NO_FILE ) : UPLOAD_ERR_NO_FILE;
+		// Over upload_max_filesize PHP drops the file; over post_max_size the whole body. Answer
+		// 413 like a web server would, so the client resends the part in smaller pieces.
+		$post_max = wp_convert_hr_to_bytes( (string) ini_get( 'post_max_size' ) );
+		if ( in_array( $error, array( UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE ), true ) || ( ! is_array( $file ) && $post_max > 0 && (int) ( $_SERVER['CONTENT_LENGTH'] ?? 0 ) > $post_max ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- compared as an integer only.
+			return new WP_Error( 'wp_chrono_upload_size', sprintf( 'This part of the file is larger than PHP accepts here (upload_max_filesize %1$s, post_max_size %2$s). Send it in smaller parts.', ini_get( 'upload_max_filesize' ), ini_get( 'post_max_size' ) ), array( 'status' => 413 ) );
+		}
+		if ( ! is_array( $file ) || UPLOAD_ERR_OK !== $error || ! is_uploaded_file( (string) $file['tmp_name'] ) ) {
 			return new WP_Error( 'wp_chrono_upload', 'Send the next part of the file in the "chunk" field.', array( 'status' => 400 ) );
 		}
 		$name = (string) $request['name'];

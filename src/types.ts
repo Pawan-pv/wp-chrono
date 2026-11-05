@@ -262,12 +262,14 @@ export interface LicenseStatus {
   active: boolean;
   plan: 'free' | 'pro' | 'agency';
   from: 'constant' | 'option' | null;
-  license: { lid: string; plan: string; sites: number; source: string; issued: string; expires: string | null } | null;
+  license: { lid: string; plan: string; sites: number; source: string; issued: string; expires: string | null; term: 'yearly' | 'lifetime' | null } | null;
   masked: string | null;
   error: string | null;
   features: Record<'blueprints' | 'cloud', boolean>;
   free: string[];
   server: string;
+  /** The store's plans page, '' when no API is configured. */
+  pricing: string;
 }
 
 /** GET /onboarding. */

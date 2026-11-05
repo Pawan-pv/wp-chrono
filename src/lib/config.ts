@@ -14,7 +14,8 @@ export interface ChronoConfig {
   superAdmin: boolean;
   /** First run after activation: show the welcome modal. */
   welcome: boolean;
-  license: { active: boolean; plan: string; features: Record<'blueprints' | 'cloud', boolean> };
+  /** pricing: the store's plans page, '' when no API is configured. */
+  license: { active: boolean; plan: string; features: Record<'blueprints' | 'cloud', boolean>; pricing: string };
 }
 
 declare global {
@@ -38,5 +39,5 @@ export const config: ChronoConfig = window.wpChrono ?? {
   mainSite: false,
   superAdmin: false,
   welcome: false,
-  license: { active: false, plan: 'free', features: { blueprints: false, cloud: false } },
+  license: { active: false, plan: 'free', features: { blueprints: false, cloud: false }, pricing: '' },
 };

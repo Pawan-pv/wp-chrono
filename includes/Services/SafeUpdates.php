@@ -375,9 +375,8 @@ final class SafeUpdates {
 		if ( ! is_file( $file ) ) {
 			return null;
 		}
-		$upgrading = null;
 		include $file; // Defines $upgrading, like wp_is_maintenance_mode().
-		return is_int( $upgrading ) ? $upgrading : null;
+		return isset( $upgrading ) && is_int( $upgrading ) ? $upgrading : null;
 	}
 
 	// ---------------------------------------------------------------------

@@ -137,7 +137,7 @@ final class ResetService {
 			/**
 			 * Lets the snapshot engine take a safety snapshot before a reset.
 			 *
-			 * @param array|null $snapshot Null when no engine handled it.
+			 * @param array|\WP_Error|null $snapshot Null when no engine handled it.
 			 * @param string     $target   Reset target, or 'full'.
 			 * @param array      $state    Pre-reset table summary.
 			 */

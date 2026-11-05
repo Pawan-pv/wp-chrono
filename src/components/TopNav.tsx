@@ -35,6 +35,7 @@ export function TopNav({ route, onNavigate, onOpenPalette, dark, onToggleTheme, 
               key={r}
               type="button"
               onClick={() => onNavigate(r)}
+              aria-label={label}
               aria-current={route === r ? 'page' : undefined}
               className={cn(
                 'flex h-8 shrink-0 items-center gap-2 rounded-md px-3 text-sm transition-colors',

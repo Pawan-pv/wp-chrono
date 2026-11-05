@@ -92,7 +92,7 @@ final class Admin {
 			'mainSite'    => is_multisite() && is_main_site(),
 			'superAdmin'  => is_super_admin(),
 			'welcome'     => ! OnboardingController::flags()['welcome_seen'],
-			'license'     => array_intersect_key( LicenseService::status(), array_flip( array( 'active', 'plan', 'features' ) ) ),
+			'license'     => array_intersect_key( LicenseService::status(), array_flip( array( 'active', 'plan', 'features', 'pricing' ) ) ),
 		);
 
 		wp_add_inline_script( 'wp-chrono-app', 'window.wpChrono = ' . wp_json_encode( $config ) . ';', 'before' );
