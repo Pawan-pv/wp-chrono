@@ -83,6 +83,24 @@ describe('api client', () => {
     await expect(api('snapshots')).rejects.toMatchObject({ message: 'Request failed with status 500', status: 500 });
   });
 
+  it('falls back to a generic message when the body is empty (null payload)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 500 })));
+    const { api } = await loadApi();
+    await expect(api('snapshots')).rejects.toMatchObject({
+      message: 'Request failed with status 500',
+      status: 500,
+      code: undefined,
+    });
+  });
+
+  it('falls back to a generic message when message is not a string (e.g. a number)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json(500, { message: 42, code: 'wp_chrono_pro' })));
+    const { api } = await loadApi();
+    const error = await api('snapshots').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ message: 'Request failed with status 500', status: 500, code: 'wp_chrono_pro' });
+  });
+
   it('uploads multipart with the nonces and explains a web-server 413', async () => {
     const fetchMock = vi.fn(async () => new Response('<html>413</html>', { status: 413 }));
     vi.stubGlobal('fetch', fetchMock);

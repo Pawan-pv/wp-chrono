@@ -87,11 +87,16 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
     payload = null;
   }
   if (!response.ok) {
-    throw new ApiError(
-      payload?.message ?? `Request failed with status ${response.status}`,
-      response.status,
-      payload?.code,
-    );
+    // payload is `unknown` until proven otherwise: narrow at runtime instead of
+    // giving it a fake type. Only string `message`/`code` are trusted.
+    const body = typeof payload === 'object' && payload !== null
+      ? (payload as Record<string, unknown>)
+      : {};
+    const message = typeof body.message === 'string'
+      ? body.message
+      : `Request failed with status ${response.status}`;
+    const code = typeof body.code === 'string' ? body.code : undefined;
+    throw new ApiError(message, response.status, code);
   }
   if (payload === null || payload === undefined) {
     throw new ApiError(`Server returned an empty response for ${path}.`, response.status);
