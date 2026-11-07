@@ -1,4 +1,4 @@
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { config } from '@/lib/config';
 import { formatBytes, formatNumber } from '@/lib/format';
 import type {
@@ -57,7 +57,23 @@ function adoptNonces(nonces: { rest: string; chrono: string } | null) {
 
 /** Fetch fresh nonces from the server (needed after a full reset wipes nonces). */
 export async function refreshConfig(): Promise<void> {
-  const fresh = await api<{ rest: string; chrono: string }>('nonce');
+  // DIAGNOSTICS: capture the raw GET /nonce response to find why it can return
+  // an empty body after a full reset.
+  const res = await fetch(`${config.restUrl}nonce`, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+      'X-WP-Nonce': config.restNonce,
+      'X-WP-Chrono-Nonce': config.chronoNonce,
+    },
+    credentials: 'same-origin',
+  });
+  const body = await res.text();
+  console.log(`DIAG nonce: status=${res.status}, contentType=${res.headers.get('content-type')}, body=${JSON.stringify(body)}`);
+  if (!res.ok) {
+    throw new ApiError(`Nonce refresh failed with status ${res.status}`, res.status);
+  }
+  const fresh = JSON.parse(body);
   config.restNonce = fresh.rest;
   config.chronoNonce = fresh.chrono;
 }
