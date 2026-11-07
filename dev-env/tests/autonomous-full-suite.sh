@@ -30,6 +30,12 @@ record() { # name, logfile, exit-code, seconds
   NAMES+=("$1")
   RESULTS+=("$(printf '%-6s %4s pass %3s fail %5ss' "$([ "$fail" -eq 0 ] && echo OK || echo FAILED)" "$pass" "$fail" "$4")")
   printf '  %-46s %s\n' "$1" "${RESULTS[-1]}"
+  # Print full error output for failed checks so the CI log shows the evidence.
+  if [ "$fail" -gt 0 ] && [ -s "$2" ]; then
+    echo "    --- FAILURE DETAILS ($1) ---"
+    grep -E '^FAIL|Error|error:|failed|403|400|422|session|nonce|expired|not allowed' "$2" | tail -20
+    echo "    --- END FAILURE DETAILS ---"
+  fi
 }
 
 run() { # name, command...

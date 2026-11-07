@@ -539,6 +539,22 @@ async function run() {
   console.log('\n== Settings & License ==');
   await page.click('Settings & License', { selector: 'button' });
   await page.waitFor(() => !!document.querySelector('[data-e2e="settings-dialog"] input[aria-label="Rollback archive size limit (MB)"]')?.value, [], 10000, 'settings dialog');
+  // DIAGNOSTICS: log input value and nonce right before Save is clicked.
+  const saveDiag = await page.eval(() => {
+    const input = document.querySelector('[data-e2e="settings-dialog"] input[aria-label="Rollback archive size limit (MB)"]');
+    const btn = document.querySelector('[data-e2e="settings-save"]');
+    return {
+      inputValue: input ? input.value : null,
+      inputDisabled: input ? input.disabled : null,
+      btnFound: !!btn,
+      chronoNonce: window.wpChrono ? window.wpChrono.chronoNonce : null,
+      restNonce: window.wpChrono ? window.wpChrono.restNonce : null,
+    };
+  });
+  console.log(`DIAG input value before save: "${saveDiag.inputValue}" (disabled=${saveDiag.inputDisabled})`);
+  console.log(`DIAG chronoNonce: ${saveDiag.chronoNonce}`);
+  console.log(`DIAG restNonce: ${saveDiag.restNonce}`);
+  console.log(`DIAG save button found: ${saveDiag.btnFound}`);
   await page.eval(() => {
     const el = document.querySelector('[data-e2e="settings-dialog"] input[aria-label="Rollback archive size limit (MB)"]');
     el.focus();
@@ -576,6 +592,21 @@ async function run() {
       settingsSaved = true;
     } catch (e) {
       lastError = e;
+      // DIAGNOSTICS: after a failed save, probe the server to see what it returns.
+      const postDiag = await page.eval(async () => {
+        try {
+          const res = await fetch(`${window.wpChrono.restUrl}settings`, {
+            method: 'POST',
+            headers: { 'X-WP-Nonce': window.wpChrono.restNonce, 'X-WP-Chrono-Nonce': window.wpChrono.chronoNonce, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rollback_max_mb: 300 }),
+          });
+          const body = await res.text();
+          return { status: res.status, body };
+        } catch (err) {
+          return { error: err.message };
+        }
+      });
+      console.log(`DIAG POST /settings after failed save: ${JSON.stringify(postDiag)}`);
       // Capture JS errors for diagnosis
       const jsErrors = page.consoleErrors.slice(-5);
       // Explain the failure: reload, dialog closed, or an error message instead.
