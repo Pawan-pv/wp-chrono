@@ -67,11 +67,11 @@ export async function refreshConfig(fallback?: { rest: string; chrono: string })
     const fresh = await api<{ rest: string; chrono: string }>('nonce');
     config.restNonce = fresh.rest;
     config.chronoNonce = fresh.chrono;
-  } catch {
+  } catch (_e) {
     if (fallback) {
       adoptNonces(fallback);
     } else {
-      throw;
+      throw _e;
     }
   }
 }
