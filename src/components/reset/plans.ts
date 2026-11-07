@@ -213,7 +213,7 @@ export function blueprintPlan(blueprint: Blueprint): ResetPlan {
       for (let i = 0; i < MAX_TICKS; i++) {
           let tick: BlueprintStepResult | undefined;
         let lastError: unknown;
-        for (let attempt = 0; attempt < 3; attempt++) {
+        for (let attempt = 0; attempt < 10; attempt++) {
           try {
             tick = await api<BlueprintStepResult>(`blueprints/${blueprint.id}/apply`, {
               method: 'POST',
@@ -223,9 +223,9 @@ export function blueprintPlan(blueprint: Blueprint): ResetPlan {
           } catch (e) {
             lastError = e;
             // After a full reset, the first apply call(s) can return an empty body.
-            // Retry with a short delay so the REST server can settle.
-            if (attempt < 2) {
-              await new Promise((r) => setTimeout(r, 500));
+            // Retry with a short delay so the REST server can settle after wp_install().
+            if (attempt < 9) {
+              await new Promise((r) => setTimeout(r, 1000));
             }
           }
         }
