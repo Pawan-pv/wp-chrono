@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { refreshConfig } from './plans';
-import { config } from './config';
+import { config } from '@/lib/config';
 
 describe('refreshConfig', () => {
   afterEach(() => {

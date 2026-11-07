@@ -62,7 +62,7 @@ function adoptNonces(nonces: { rest: string; chrono: string } | null) {
  * nonces were created by Session::refresh() after wp_install() regenerated
  * the nonce keys, so they are guaranteed valid for the new session.
  */
-export async function refreshConfig(fallback?: { rest: string; chrono: string }): Promise<void> {
+export async function refreshConfig(fallback?: { rest: string; chrono: string } | null): Promise<void> {
   try {
     const fresh = await api<{ rest: string; chrono: string }>('nonce');
     config.restNonce = fresh.rest;
