@@ -212,19 +212,24 @@ export function blueprintPlan(blueprint: Blueprint): ResetPlan {
       let failed = 0;
       for (let i = 0; i < MAX_TICKS; i++) {
         let tick: BlueprintStepResult;
-        try {
-          tick = await api<BlueprintStepResult>(`blueprints/${blueprint.id}/apply`, {
-            method: 'POST',
-            body: { step, confirm: CONFIRM },
-          });
-        } catch {
-          // After a full reset, the first apply call can return an empty body.
-          // Retry once with the same step.
-          tick = await api<BlueprintStepResult>(`blueprints/${blueprint.id}/apply`, {
-            method: 'POST',
-            body: { step, confirm: CONFIRM },
-          });
+        let lastError: unknown;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            tick = await api<BlueprintStepResult>(`blueprints/${blueprint.id}/apply`, {
+              method: 'POST',
+              body: { step, confirm: CONFIRM },
+            });
+            break;
+          } catch (e) {
+            lastError = e;
+            // After a full reset, the first apply call(s) can return an empty body.
+            // Retry with a short delay so the REST server can settle.
+            if (attempt < 2) {
+              await new Promise((r) => setTimeout(r, 500));
+            }
+          }
         }
+        if (!tick) throw lastError;
         r.log(`${tick.ok ? '✓' : '✗'} ${tick.label}`, tick.ok ? 'info' : 'error');
         tick.log.forEach((line) => r.log(`    ${line}`, tick.ok ? 'info' : 'error'));
         failed += tick.ok ? 0 : 1;
