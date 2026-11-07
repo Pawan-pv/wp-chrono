@@ -211,7 +211,7 @@ export function blueprintPlan(blueprint: Blueprint): ResetPlan {
       let step = 0;
       let failed = 0;
       for (let i = 0; i < MAX_TICKS; i++) {
-        let tick: BlueprintStepResult;
+          let tick: BlueprintStepResult | undefined;
         let lastError: unknown;
         for (let attempt = 0; attempt < 3; attempt++) {
           try {
