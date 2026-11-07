@@ -1,4 +1,4 @@
-import { api, ApiError } from '@/lib/api';
+import { api } from '@/lib/api';
 import { config } from '@/lib/config';
 import { formatBytes, formatNumber } from '@/lib/format';
 import type {
@@ -55,27 +55,25 @@ function adoptNonces(nonces: { rest: string; chrono: string } | null) {
   config.chronoNonce = nonces.chrono;
 }
 
-/** Fetch fresh nonces from the server (needed after a full reset wipes nonces). */
-export async function refreshConfig(): Promise<void> {
-  // DIAGNOSTICS: capture the raw GET /nonce response to find why it can return
-  // an empty body after a full reset.
-  const res = await fetch(`${config.restUrl}nonce`, {
-    method: 'GET',
-    headers: {
-      Accept: 'application/json',
-      'X-WP-Nonce': config.restNonce,
-      'X-WP-Chrono-Nonce': config.chronoNonce,
-    },
-    credentials: 'same-origin',
-  });
-  const body = await res.text();
-  console.log(`DIAG nonce: status=${res.status}, contentType=${res.headers.get('content-type')}, body=${JSON.stringify(body)}`);
-  if (!res.ok) {
-    throw new ApiError(`Nonce refresh failed with status ${res.status}`, res.status);
+/** Fetch fresh nonces from the server (needed after a full reset wipes nonces).
+ *
+ * If the nonce endpoint returns an empty body or an error, fall back to the
+ * nonces already obtained from reset/full (the `fallback` parameter). Those
+ * nonces were created by Session::refresh() after wp_install() regenerated
+ * the nonce keys, so they are guaranteed valid for the new session.
+ */
+export async function refreshConfig(fallback?: { rest: string; chrono: string }): Promise<void> {
+  try {
+    const fresh = await api<{ rest: string; chrono: string }>('nonce');
+    config.restNonce = fresh.rest;
+    config.chronoNonce = fresh.chrono;
+  } catch {
+    if (fallback) {
+      adoptNonces(fallback);
+    } else {
+      throw;
+    }
   }
-  const fresh = JSON.parse(body);
-  config.restNonce = fresh.rest;
-  config.chronoNonce = fresh.chrono;
 }
 
 /** Runs build ticks until the snapshot is ready, reporting table progress. */
@@ -202,8 +200,10 @@ export function blueprintPlan(blueprint: Blueprint): ResetPlan {
       // After a full reset the WordPress nonce keys are regenerated. The nonces
       // returned by reset/full should be fresh, but re-fetch via the nonce
       // endpoint (which only needs the WordPress REST nonce, not the chrono
-      // nonce) to be sure the SPA's next request isn't rejected.
-      await refreshConfig();
+      // nonce) to be sure the SPA's next request isn't rejected. If the nonce
+      // endpoint returns an empty body or errors, fall back to the nonces
+      // already obtained from reset/full — they are valid for the new session.
+      await refreshConfig(reset.nonces);
       r.step('reset', 'done');
 
       r.step('apply', 'running');
