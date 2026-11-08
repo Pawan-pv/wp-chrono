@@ -162,3 +162,19 @@ CI infrastructure note: setup-stack step is failing on GitHub Actions (Docker im
 affecting all workflows. This is unrelated to code changes. Retry CI when the runner recovers.
 
 Do NOT touch main or the v1.0.3 tag until CI is fully green and explicitly confirmed.
+
+## Permalink/reset fix (2026-11-08, fix/rest-after-reset merged into ci-github-actions)
+Real causes of the Red baseline failures:
+1. TypeScript error (TS2339 in api(): unknown payload narrowed at runtime) — fixed.
+2. Permalink reset bug: full reset via wp_install() reset permalink_structure
+   to plain (''), so the SPA's stale /wp-json/… URLs returned the homepage
+   (HTTP 200, text/html) after the reset. Fixed by preserving
+   permalink_structure through the reset, re-initialising $wp_rewrite and
+   flushing rules, and returning a fresh rest_url() from reset/full so the
+   SPA adopts the correct base without a reload.
+
+Rule: always read `gh run view --log-failed` before deciding a cause.
+(`--log-failed` alone is misleading — download the run artifact for suite logs.)
+
+Abandoned branches: `fix/blueprint-nonce` and `debug/settings-save` (do not
+merge, do not push to them).
