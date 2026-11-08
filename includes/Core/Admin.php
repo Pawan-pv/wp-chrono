@@ -77,7 +77,12 @@ final class Admin {
 		$user   = wp_get_current_user();
 		$config = array(
 			'version'     => WP_CHRONO_VERSION,
-			'restUrl'     => esc_url_raw( rest_url( RestController::NAMESPACE . '/' ) ),
+			// Always the ?rest_route= form: it routes with any permalink
+			// setting (pretty or plain), so REST calls keep working even if
+			// a full reset rewrites permalink_structure before the page
+			// reloads. rest_url() would give /wp-json/… on pretty sites,
+			// which stops routing once the site is plain.
+			'restUrl'     => esc_url_raw( trailingslashit( home_url() ) . '?rest_route=/' . RestController::NAMESPACE . '/' ),
 			'restNonce'   => wp_create_nonce( 'wp_rest' ),
 			'chronoNonce' => wp_create_nonce( RestController::NONCE_ACTION ),
 			'adminUrl'    => esc_url_raw( admin_url() ),

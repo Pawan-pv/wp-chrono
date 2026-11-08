@@ -38,7 +38,7 @@ export function endpoint(path: string, query?: Query): string {
 }
 
 /**
- * Multipart upload to /wp-json/wp-chrono/v1/{path}: a file (or a Blob slice,
+ * Multipart upload to wp-chrono/v1/{path}: a file (or a Blob slice,
  * for chunked uploads) plus optional extra form fields.
  */
 export async function apiUpload<T>(path: string, field: string, file: Blob, extra: Record<string, string> = {}, filename = 'upload'): Promise<T> {
@@ -62,7 +62,7 @@ export async function apiUpload<T>(path: string, field: string, file: Blob, extr
   return payload as T;
 }
 
-/** Calls /wp-json/wp-chrono/v1/{path} with both WP REST and WP Chrono nonces. */
+/** Calls wp-chrono/v1/{path} with both WP REST and WP Chrono nonces. The base is the ?rest_route= form (see Admin), so any permalink setting works. */
 export async function api<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
@@ -101,9 +101,14 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
     throw new ApiError(message, response.status, code);
   }
   if (payload === null || payload === undefined) {
-    // DIAGNOSTIC (STEP 2, remove in fix): log URL, status, Content-Type, body snippet.
-    console.error(`[DIAG api] url=${url} status=${response.status} contentType=${response.headers.get('content-type')} body=${JSON.stringify(text.slice(0, 300))} path=${path}`);
-    throw new ApiError(`Server returned an empty response for ${path}.`, response.status);
+    // A 200 that isn't JSON (e.g. the homepage after a permalink change
+    // broke /wp-json/…) must not be mistaken for an empty API reply:
+    // name what actually came back so the mismatch is obvious.
+    const contentType = response.headers.get('content-type') ?? 'unknown';
+    throw new ApiError(
+      `The server returned a web page instead of data (HTTP ${response.status}, ${contentType}) for ${path}.`,
+      response.status,
+    );
   }
   return payload as T;
 }

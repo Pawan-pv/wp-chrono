@@ -93,6 +93,21 @@ describe('api client', () => {
     });
   });
 
+  it('throws a clear error when a 200 response is HTML (permalink mismatch)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('<!DOCTYPE html><html><title>Site</title></html>', { status: 200, headers: { 'Content-Type': 'text/html; charset=UTF-8' } })),
+    );
+    const { api, ApiError } = await loadApi();
+    const error = await api('nonce').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    // Not "empty response": the page came back because /wp-json/… no longer routes.
+    expect(error).toMatchObject({ status: 200 });
+    expect((error as Error).message).toMatch(/web page instead of data/);
+    expect((error as Error).message).toMatch(/HTTP 200/);
+    expect((error as Error).message).toMatch(/text\/html/);
+  });
+
   it('falls back to a generic message when message is not a string (e.g. a number)', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json(500, { message: 42, code: 'wp_chrono_pro' })));
     const { api } = await loadApi();

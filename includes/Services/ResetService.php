@@ -27,8 +27,12 @@ final class ResetService {
 	/**
 	 * Options carried over a full reset, in addition to DB-stored salts
 	 * (Session::SALT_OPTIONS) and every `wp_chrono_*` option.
+	 *
+	 * `permalink_structure` must survive: wp_install() resets it to plain,
+	 * which breaks pretty REST URLs (/wp-json/…) that the SPA still uses
+	 * after the reset, and breaks the site's own links.
 	 */
-	const RETAINED_OPTIONS = array( 'blogname', 'siteurl', 'home', 'WPLANG', 'blog_public' );
+	const RETAINED_OPTIONS = array( 'blogname', 'siteurl', 'home', 'WPLANG', 'blog_public', 'permalink_structure' );
 
 	/**
 	 * @return array<string,class-string<Cleaner>>
@@ -202,8 +206,6 @@ final class ResetService {
 		$user_row       = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$wpdb->users} WHERE ID = %d", $user->ID ), ARRAY_A ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
 		$session_tokens = get_user_meta( $user->ID, 'session_tokens', true );
 		$options        = $this->capture_options( $keep_users );
-		// DIAGNOSTIC (STEP 2, remove in fix): permalink before reset.
-		error_log( sprintf( 'DIAG permalink before reset=%s captured=%s', var_export( get_option( 'permalink_structure', null ), true ), var_export( $options['permalink_structure'] ?? '(not captured)', true ) ) );
 		$stylesheet     = get_stylesheet();
 		$active_plugins = array_values( array_diff( (array) get_option( 'active_plugins', array() ), array( WP_CHRONO_BASENAME ) ) );
 		$step( sprintf( 'Captured admin "%s", %d options, theme and %d active plugins', $user_row['user_login'], count( $options ), count( $active_plugins ) ) );
@@ -253,9 +255,11 @@ final class ResetService {
 		// 5. Restore options, theme and plugins.
 		Session::restore_options( $options );
 		update_option( 'active_plugins', array( WP_CHRONO_BASENAME ) );
+		// Permalink was restored; regenerate rewrite rules so pretty links
+		// (and /wp-json/…) route again. Soft flush: .htaccess was never
+		// dropped, only the DB was, so no file write is needed.
+		flush_rewrite_rules( false );
 		wp_cache_flush();
-		// DIAGNOSTIC (STEP 2, remove in fix): permalink after restore.
-		error_log( sprintf( 'DIAG permalink after reset=%s', var_export( get_option( 'permalink_structure', null ), true ) ) );
 
 		if ( $keep_theme && $stylesheet !== get_stylesheet() && wp_get_theme( $stylesheet )->exists() ) {
 			switch_theme( $stylesheet );
