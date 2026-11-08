@@ -17,7 +17,12 @@ import { expect, test, type Page } from '@playwright/test';
 const USER = process.env.WP_USERNAME ?? (process.env.BASE_URL ? 'chrono' : 'admin');
 const PASS = process.env.WP_PASSWORD ?? (process.env.BASE_URL ? 'chrono-pass' : 'password');
 const DEBUG_LOG_CMD =
-  process.env.DEBUG_LOG_CMD ?? (process.env.BASE_URL ? '' : 'npx wp-env run cli tail -n 300 /var/www/html/wp-content/debug.log');
+  // wp-env's CLI container runs `wp` as its command; plain `tail` never reaches
+  // the shell. Reading through `wp eval` works on every wp-env setup.
+  process.env.DEBUG_LOG_CMD ??
+  (process.env.BASE_URL
+    ? ''
+    : `npx wp-env run cli wp eval 'echo @file_exists( WP_CONTENT_DIR . "/debug.log" ) ? file_get_contents( WP_CONTENT_DIR . "/debug.log" ) : "";'`);
 
 let errors: string[] = [];
 
@@ -40,11 +45,17 @@ async function login(page: Page) {
 
 async function openChrono(page: Page) {
   await page.goto('/wp-admin/admin.php?page=wp-chrono#/dashboard');
-  await expect(page.getByRole('heading', { name: 'Overview', level: 1 })).toBeVisible();
-  // First run shows the welcome modal; it is part of the product, so close it the user's way.
+  // The first-run welcome modal (or the Radix inert it casts over the page)
+  // hides real content from role queries — settle it before asserting.
   const welcome = page.getByTestId('welcome-modal');
-  if (await welcome.isVisible()) await page.keyboard.press('Escape');
-  await expect(welcome).toBeHidden();
+  const overview = page.getByRole('heading', { name: 'Overview', level: 1 });
+  await expect(welcome.or(overview)).toBeVisible();
+  if (await welcome.isVisible()) {
+    // It is part of the product, so close it the user's way.
+    await page.keyboard.press('Escape');
+    await expect(welcome).toBeHidden();
+  }
+  await expect(overview).toBeVisible();
 }
 
 test.describe('WP Chrono admin screen', () => {

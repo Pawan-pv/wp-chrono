@@ -83,7 +83,7 @@ jobs:
       - name: Inspect debug.log for PHP errors from the plugin
         if: ${{ always() && steps.wp-env.outcome == 'success' }}
         run: |
-          npx wp-env run cli tail -n 100 /var/www/html/wp-content/debug.log > "$RUNNER_TEMP/wp-debug.log" || true
+          npx wp-env run cli wp eval 'echo @file_exists( WP_CONTENT_DIR . "/debug.log" ) ? file_get_contents( WP_CONTENT_DIR . "/debug.log" ) : "";' > "$RUNNER_TEMP/wp-debug.log" || true
           cat "$RUNNER_TEMP/wp-debug.log"
           ! grep -E 'PHP (Fatal error|Warning|Deprecated|Parse error)' "$RUNNER_TEMP/wp-debug.log" | grep wp-chrono
 
