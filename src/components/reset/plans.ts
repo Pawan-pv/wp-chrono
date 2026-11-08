@@ -49,7 +49,8 @@ const CONFIRM = 'RESET';
 const MAX_TICKS = 5000;
 
 /** After a full reset or restore the auth cookie is re-issued; old nonces are stale. */
-function adoptNonces(nonces: { rest: string; chrono: string } | null) {
+function adoptNonces(nonces: { rest: string; chrono: string } | null, restUrl?: string) {
+  if (restUrl) config.restUrl = restUrl;
   if (!nonces) return;
   config.restNonce = nonces.rest;
   config.chronoNonce = nonces.chrono;
@@ -148,7 +149,7 @@ export function fullResetPlan(opts: { keep_theme: boolean; keep_plugins: boolean
       r.step('reset', 'done');
 
       r.step('session', 'running');
-      adoptNonces(result.nonces);
+      adoptNonces(result.nonces, result.restUrl);
       r.step('session', 'done');
       r.progress(1);
 
@@ -182,7 +183,7 @@ export function blueprintPlan(blueprint: Blueprint): ResetPlan {
         body: { confirm: CONFIRM, keep_theme: false, keep_plugins: false, keep_users: false },
       });
       reset.steps.forEach((s) => r.log(`${String(s.ms).padStart(6)} ms  ${s.label}`));
-      adoptNonces(reset.nonces);
+      adoptNonces(reset.nonces, reset.restUrl);
       // After a full reset the WordPress nonce keys are regenerated. The nonces
       // returned by reset/full should be fresh, but re-fetch via the nonce
       // endpoint (which only needs the WordPress REST nonce, not the chrono

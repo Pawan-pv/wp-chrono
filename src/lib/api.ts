@@ -62,7 +62,7 @@ export async function apiUpload<T>(path: string, field: string, file: Blob, extr
   return payload as T;
 }
 
-/** Calls wp-chrono/v1/{path} with both WP REST and WP Chrono nonces. The base is the plain index.php?rest_route= form (see Admin), so any permalink setting works. */
+/** Calls wp-chrono/v1/{path} with both WP REST and WP Chrono nonces. The base is rest_url() from Admin; after a reset the server returns a fresh restUrl and the SPA adopts it (see plans.ts). */
 export async function api<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers: Record<string, string> = {
     Accept: 'application/json',

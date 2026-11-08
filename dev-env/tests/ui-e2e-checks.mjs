@@ -688,9 +688,8 @@ async function run() {
   await page.screenshot('19-baseline-done');
   check('session survives the baseline reset (fresh nonce hot-swapped)', (await page.eval(() => window.wpChrono.chronoNonce)) !== nonceBeforeBaseline);
   // REST must work immediately after a full reset on a pretty-permalink site:
-  // the option survives the reset, and both the SPA base
-  // (index.php?rest_route=) and the pretty /wp-json/… form return JSON
-  // (not the homepage).
+  // the option survives the reset, and both the SPA base (rest_url()) and
+  // the pretty /wp-json/… form return JSON (not the homepage).
   const permAfter = fixture('permalink').PERMALINK ?? '';
   check('permalink_structure preserved across the full reset (still pretty)', permAfter === permBefore && permAfter.includes('%postname%'), permAfter);
   const nonceWorks = await page.eval(async () => {

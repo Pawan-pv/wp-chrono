@@ -12,6 +12,7 @@
 namespace WPChrono\Services;
 
 use WP_Error;
+use WPChrono\API\RestController;
 use WPChrono\Core\Schema;
 use WPChrono\Services\Reset\Cleaner;
 
@@ -258,6 +259,8 @@ final class ResetService {
 		// Permalink was restored; regenerate rewrite rules so pretty links
 		// (and /wp-json/…) route again. Soft flush: .htaccess was never
 		// dropped, only the DB was, so no file write is needed.
+		global $wp_rewrite;
+		$wp_rewrite->init();
 		flush_rewrite_rules( false );
 		wp_cache_flush();
 
@@ -300,6 +303,9 @@ final class ResetService {
 			'steps'          => $steps,
 			'plugin_errors'  => $plugin_errors,
 			'nonces'         => $nonces,
+			// Computed after permalinks are restored, so the SPA can adopt
+			// the correct restUrl() form (pretty or plain) without a reload.
+			'restUrl'        => esc_url_raw( rest_url( RestController::NAMESPACE . '/' ) ),
 			'redirect'       => admin_url( 'admin.php?page=wp-chrono' ),
 		);
 
