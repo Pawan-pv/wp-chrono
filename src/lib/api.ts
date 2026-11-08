@@ -62,7 +62,7 @@ export async function apiUpload<T>(path: string, field: string, file: Blob, extr
   return payload as T;
 }
 
-/** Calls wp-chrono/v1/{path} with both WP REST and WP Chrono nonces. The base is the ?rest_route= form (see Admin), so any permalink setting works. */
+/** Calls wp-chrono/v1/{path} with both WP REST and WP Chrono nonces. The base is the plain index.php?rest_route= form (see Admin), so any permalink setting works. */
 export async function api<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers: Record<string, string> = {
     Accept: 'application/json',

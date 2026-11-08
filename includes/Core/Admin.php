@@ -77,12 +77,14 @@ final class Admin {
 		$user   = wp_get_current_user();
 		$config = array(
 			'version'     => WP_CHRONO_VERSION,
-			// Always the ?rest_route= form: it routes with any permalink
-			// setting (pretty or plain), so REST calls keep working even if
-			// a full reset rewrites permalink_structure before the page
-			// reloads. rest_url() would give /wp-json/… on pretty sites,
-			// which stops routing once the site is plain.
-			'restUrl'     => esc_url_raw( trailingslashit( home_url() ) . '?rest_route=/' . RestController::NAMESPACE . '/' ),
+			// Always the plain REST form via index.php: it routes with any
+			// permalink setting (pretty or plain), so REST calls keep working
+			// even if a full reset rewrites permalink_structure before the
+			// page reloads. rest_url() would give /wp-json/… on pretty sites,
+			// which stops routing once the site is plain. The index.php
+			// prefix (not /) is required on nginx: /?rest_route=… is a
+			// directory URI that nginx answers 405 for DELETE.
+			'restUrl'     => esc_url_raw( trailingslashit( home_url() ) . 'index.php?rest_route=/' . RestController::NAMESPACE . '/' ),
 			'restNonce'   => wp_create_nonce( 'wp_rest' ),
 			'chronoNonce' => wp_create_nonce( RestController::NONCE_ACTION ),
 			'adminUrl'    => esc_url_raw( admin_url() ),

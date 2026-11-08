@@ -27,9 +27,9 @@ declare global {
 /** Injected by Admin::enqueue() via wp_add_inline_script. */
 export const config: ChronoConfig = window.wpChrono ?? {
   version: 'dev',
-  // Same ?rest_route= form Admin gives, so the fallback works with any
-  // permalink setting too.
-  restUrl: '/?rest_route=/wp-chrono/v1/',
+  // Same index.php?rest_route= form Admin gives, so the fallback works
+  // with any permalink setting too.
+  restUrl: '/index.php?rest_route=/wp-chrono/v1/',
   restNonce: '',
   chronoNonce: '',
   adminUrl: '/wp-admin/',

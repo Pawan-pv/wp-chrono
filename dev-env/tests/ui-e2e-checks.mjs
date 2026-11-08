@@ -688,8 +688,9 @@ async function run() {
   await page.screenshot('19-baseline-done');
   check('session survives the baseline reset (fresh nonce hot-swapped)', (await page.eval(() => window.wpChrono.chronoNonce)) !== nonceBeforeBaseline);
   // REST must work immediately after a full reset on a pretty-permalink site:
-  // the option survives the reset, and both the SPA base (?rest_route=) and
-  // the pretty /wp-json/… form return JSON (not the homepage).
+  // the option survives the reset, and both the SPA base
+  // (index.php?rest_route=) and the pretty /wp-json/… form return JSON
+  // (not the homepage).
   const permAfter = fixture('permalink').PERMALINK ?? '';
   check('permalink_structure preserved across the full reset (still pretty)', permAfter === permBefore && permAfter.includes('%postname%'), permAfter);
   const nonceWorks = await page.eval(async () => {
@@ -784,28 +785,6 @@ async function run() {
 
   await page.goto(`${BASE}/wp-admin/admin.php?page=wp-chrono&r=${Date.now()}#/recovery`);
   await page.waitFor(() => /installed/.test(document.querySelector('#wp-chrono-root')?.innerText ?? ''), [], 15000, 'recovery status');
-  // DEBUG DELETE 405: OPTIONS to see Allow, plus a DELETE with bad nonce (403 vs 405 distinguishes routing vs auth).
-  const __delDiag = await page.eval(async () => {
-    const out = {};
-    const base = window.wpChrono.restUrl;
-    out.base = base;
-    for (const [label, url] of [['plain', base + 'recovery'], ['pretty', `${location.origin}/wp-json/wp-chrono/v1/recovery`]]) {
-      try {
-        const o = await fetch(url, { method: 'OPTIONS' });
-        out[label + '_options'] = { status: o.status, allow: o.headers.get('allow'), ct: o.headers.get('content-type'), body: (await o.text()).slice(0, 200) };
-      } catch (e) {
-        out[label + '_options'] = { err: String(e) };
-      }
-      try {
-        const d = await fetch(url, { method: 'DELETE', headers: { 'X-WP-Nonce': window.wpChrono.restNonce, 'X-WP-Chrono-Nonce': 'forged-for-debug' } });
-        out[label + '_delete_badnonce'] = { status: d.status, ct: d.headers.get('content-type'), body: (await d.text()).slice(0, 300) };
-      } catch (e) {
-        out[label + '_delete_badnonce'] = { err: String(e) };
-      }
-    }
-    return out;
-  });
-  console.log(`DEBUG delete ${JSON.stringify(__delDiag)}`);
   await page.click('Delete', { scope: '#wp-chrono-root' });
   await page.waitFor(() => /not installed/.test(document.querySelector('#wp-chrono-root').innerText), [], 10000, 'deleted');
   const gone = await page.eval(async (u) => (await fetch(u)).status, recovery.url);
