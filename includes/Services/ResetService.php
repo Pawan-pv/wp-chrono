@@ -12,6 +12,7 @@
 namespace WPChrono\Services;
 
 use WP_Error;
+use WPChrono\API\RestController;
 use WPChrono\Core\Schema;
 use WPChrono\Services\Reset\Cleaner;
 
@@ -27,8 +28,12 @@ final class ResetService {
 	/**
 	 * Options carried over a full reset, in addition to DB-stored salts
 	 * (Session::SALT_OPTIONS) and every `wp_chrono_*` option.
+	 *
+	 * `permalink_structure` must survive: wp_install() resets it to plain,
+	 * which breaks pretty REST URLs (/wp-json/…) that the SPA still uses
+	 * after the reset, and breaks the site's own links.
 	 */
-	const RETAINED_OPTIONS = array( 'blogname', 'siteurl', 'home', 'WPLANG', 'blog_public' );
+	const RETAINED_OPTIONS = array( 'blogname', 'siteurl', 'home', 'WPLANG', 'blog_public', 'permalink_structure' );
 
 	/**
 	 * @return array<string,class-string<Cleaner>>
@@ -251,6 +256,12 @@ final class ResetService {
 		// 5. Restore options, theme and plugins.
 		Session::restore_options( $options );
 		update_option( 'active_plugins', array( WP_CHRONO_BASENAME ) );
+		// Permalink was restored; regenerate rewrite rules so pretty links
+		// (and /wp-json/…) route again. Soft flush: .htaccess was never
+		// dropped, only the DB was, so no file write is needed.
+		global $wp_rewrite;
+		$wp_rewrite->init();
+		flush_rewrite_rules( false );
 		wp_cache_flush();
 
 		if ( $keep_theme && $stylesheet !== get_stylesheet() && wp_get_theme( $stylesheet )->exists() ) {
@@ -292,6 +303,9 @@ final class ResetService {
 			'steps'          => $steps,
 			'plugin_errors'  => $plugin_errors,
 			'nonces'         => $nonces,
+			// Computed after permalinks are restored, so the SPA can adopt
+			// the correct restUrl() form (pretty or plain) without a reload.
+			'restUrl'        => esc_url_raw( rest_url( RestController::NAMESPACE . '/' ) ),
 			'redirect'       => admin_url( 'admin.php?page=wp-chrono' ),
 		);
 

@@ -92,6 +92,8 @@ export interface FullResetResponse {
   steps: { label: string; ms: number }[];
   plugin_errors: string[];
   nonces: { rest: string; chrono: string } | null;
+  /** Fresh REST base computed after permalinks are restored; adopt when present. */
+  restUrl?: string;
   redirect: string;
 }
 

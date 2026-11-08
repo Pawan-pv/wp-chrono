@@ -38,7 +38,7 @@ export function endpoint(path: string, query?: Query): string {
 }
 
 /**
- * Multipart upload to /wp-json/wp-chrono/v1/{path}: a file (or a Blob slice,
+ * Multipart upload to wp-chrono/v1/{path}: a file (or a Blob slice,
  * for chunked uploads) plus optional extra form fields.
  */
 export async function apiUpload<T>(path: string, field: string, file: Blob, extra: Record<string, string> = {}, filename = 'upload'): Promise<T> {
@@ -62,7 +62,7 @@ export async function apiUpload<T>(path: string, field: string, file: Blob, extr
   return payload as T;
 }
 
-/** Calls /wp-json/wp-chrono/v1/{path} with both WP REST and WP Chrono nonces. */
+/** Calls wp-chrono/v1/{path} with both WP REST and WP Chrono nonces. The base is rest_url() from Admin; after a reset the server returns a fresh restUrl and the SPA adopts it (see plans.ts). */
 export async function api<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
@@ -71,7 +71,8 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
   };
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
 
-  const response = await fetch(endpoint(path, options.query), {
+  const url = endpoint(path, options.query);
+  const response = await fetch(url, {
     method: options.method ?? 'GET',
     headers,
     credentials: 'same-origin',
@@ -79,9 +80,10 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
     signal: options.signal,
   });
 
-  let payload: unknown;
+  const text = await response.text();
+  let payload: unknown = null;
   try {
-    payload = await response.json();
+    payload = text ? JSON.parse(text) : null;
   } catch {
     // Empty or non-JSON body (e.g. server returned HTTP 200 with no body).
     payload = null;
@@ -99,7 +101,14 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
     throw new ApiError(message, response.status, code);
   }
   if (payload === null || payload === undefined) {
-    throw new ApiError(`Server returned an empty response for ${path}.`, response.status);
+    // A 200 that isn't JSON (e.g. the homepage after a permalink change
+    // broke /wp-json/…) must not be mistaken for an empty API reply:
+    // name what actually came back so the mismatch is obvious.
+    const contentType = response.headers.get('content-type') ?? 'unknown';
+    throw new ApiError(
+      `The server returned a web page instead of data (HTTP ${response.status}, ${contentType}) for ${path}.`,
+      response.status,
+    );
   }
   return payload as T;
 }

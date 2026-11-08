@@ -675,6 +675,8 @@ async function run() {
   await page.screenshot('18-blueprints');
 
   const nonceBeforeBaseline = await page.eval(() => window.wpChrono.chronoNonce);
+  const permBefore = fixture('permalink').PERMALINK ?? '';
+  check('site starts with pretty permalinks', permBefore.includes('%postname%'), permBefore);
   await page.click('Reset to Dev Baseline', { scope: `[data-e2e-blueprint="${BP_NAME}"]` });
   await page.waitFor(() => /Reset to Dev Baseline:/.test(document.querySelector('[role="alertdialog"]')?.innerText ?? ''), [], 5000, 'baseline dialog');
   await page.eval(() => document.querySelector('#wpc-confirm').focus());
@@ -685,6 +687,33 @@ async function run() {
   check('Reset to Dev Baseline: safety snapshot → full reset → every step ✓', /Site rebuilt from blueprint/.test(baselineLog) && /✓ Apply \d+ baseline settings/.test(baselineLog) && !/✗/.test(baselineLog), baselineLog.match(/Site rebuilt[^\n]*/)?.[0]);
   await page.screenshot('19-baseline-done');
   check('session survives the baseline reset (fresh nonce hot-swapped)', (await page.eval(() => window.wpChrono.chronoNonce)) !== nonceBeforeBaseline);
+  // REST must work immediately after a full reset on a pretty-permalink site:
+  // the option survives the reset, and both the SPA base (rest_url()) and
+  // the pretty /wp-json/… form return JSON (not the homepage).
+  const permAfter = fixture('permalink').PERMALINK ?? '';
+  check('permalink_structure preserved across the full reset (still pretty)', permAfter === permBefore && permAfter.includes('%postname%'), permAfter);
+  const nonceWorks = await page.eval(async () => {
+    const r = await fetch(window.wpChrono.restUrl + 'nonce', { headers: { 'X-WP-Nonce': window.wpChrono.restNonce, 'X-WP-Chrono-Nonce': window.wpChrono.chronoNonce } });
+    if (!r.ok) return false;
+    try {
+      const j = await r.json();
+      return !!(j.rest && j.chrono);
+    } catch {
+      return false;
+    }
+  });
+  check('REST calls work right after full reset (nonce round-trip via SPA base)', nonceWorks);
+  const prettyWorks = await page.eval(async () => {
+    const r = await fetch(`${location.origin}/wp-json/wp-chrono/v1/nonce`, { headers: { 'X-WP-Nonce': window.wpChrono.restNonce, 'X-WP-Chrono-Nonce': window.wpChrono.chronoNonce } });
+    if (!r.ok) return false;
+    try {
+      const j = await r.json();
+      return !!(j.rest && j.chrono);
+    } catch {
+      return false;
+    }
+  });
+  check('pretty /wp-json/… routing still works after reset (permalink preserved)', prettyWorks);
   await page.click('Close', { scope: '[role="alertdialog"]' });
 
   // -- Cloud (Milestone 3) ----------------------------------------------------------------
