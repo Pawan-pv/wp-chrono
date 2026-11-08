@@ -71,7 +71,8 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
   };
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
 
-  const response = await fetch(endpoint(path, options.query), {
+  const url = endpoint(path, options.query);
+  const response = await fetch(url, {
     method: options.method ?? 'GET',
     headers,
     credentials: 'same-origin',
@@ -79,9 +80,10 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
     signal: options.signal,
   });
 
-  let payload: unknown;
+  const text = await response.text();
+  let payload: unknown = null;
   try {
-    payload = await response.json();
+    payload = text ? JSON.parse(text) : null;
   } catch {
     // Empty or non-JSON body (e.g. server returned HTTP 200 with no body).
     payload = null;
@@ -99,6 +101,8 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
     throw new ApiError(message, response.status, code);
   }
   if (payload === null || payload === undefined) {
+    // DIAGNOSTIC (STEP 2, remove in fix): log URL, status, Content-Type, body snippet.
+    console.error(`[DIAG api] url=${url} status=${response.status} contentType=${response.headers.get('content-type')} body=${JSON.stringify(text.slice(0, 300))} path=${path}`);
     throw new ApiError(`Server returned an empty response for ${path}.`, response.status);
   }
   return payload as T;

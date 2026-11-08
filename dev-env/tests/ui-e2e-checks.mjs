@@ -675,6 +675,9 @@ async function run() {
   await page.screenshot('18-blueprints');
 
   const nonceBeforeBaseline = await page.eval(() => window.wpChrono.chronoNonce);
+  // DIAGNOSTIC (STEP 2, remove in fix): permalink + restUrl before reset.
+  const __permBefore = await page.eval(async () => { try { const r = await fetch(location.origin + '/?rest_route=/wp/v2/settings', { headers: { 'X-WP-Nonce': window.wpChrono.restNonce } }); const j = await r.json(); return j.permalink_structure ?? '(missing)'; } catch (e) { return 'ERR:' + String(e); } });
+  console.log(`DIAG baseline permalink_before=${JSON.stringify(__permBefore)} restUrl=${await page.eval(() => window.wpChrono.restUrl)}`);
   await page.click('Reset to Dev Baseline', { scope: `[data-e2e-blueprint="${BP_NAME}"]` });
   await page.waitFor(() => /Reset to Dev Baseline:/.test(document.querySelector('[role="alertdialog"]')?.innerText ?? ''), [], 5000, 'baseline dialog');
   await page.eval(() => document.querySelector('#wpc-confirm').focus());
@@ -682,6 +685,12 @@ async function run() {
   await page.click('Reset to baseline', { scope: '[role="alertdialog"]' });
   await page.waitFor(() => /Site rebuilt from blueprint|failed step/.test(document.querySelector('[role="alertdialog"]')?.innerText ?? ''), [], 240000, 'baseline applied');
   const baselineLog = await page.text('[role="alertdialog"]');
+  // DIAGNOSTIC (STEP 2, remove in fix): fetch nonce URL as the SPA does, log status/headers/body.
+  const __diag = await page.eval(async () => { const url = window.wpChrono.restUrl + 'nonce'; try { const req = window.wpChrono; const res = await fetch(url, { headers: { 'X-WP-Nonce': req.restNonce, 'X-WP-Chrono-Nonce': req.chronoNonce } }); const text = await res.text(); return { url, status: res.status, ct: res.headers.get('content-type'), body: text.slice(0, 300) }; } catch (e) { return { url, err: String(e) }; } });
+  console.log(`DIAG baseline nonce_fetch url=${__diag.url} status=${__diag.status} ct=${__diag.ct} body=${JSON.stringify(__diag.body ?? __diag.err)}`);
+  const __permAfter = await page.eval(async () => { try { const r = await fetch(location.origin + '/?rest_route=/wp/v2/settings', { headers: { 'X-WP-Nonce': window.wpChrono.restNonce } }); const j = await r.json(); return j.permalink_structure ?? '(missing)'; } catch (e) { return 'ERR:' + String(e); } });
+  console.log(`DIAG baseline permalink_after=${JSON.stringify(__permAfter)} restUrl=${await page.eval(() => window.wpChrono.restUrl)}`);
+  console.log(`DIAG baseline dialog=${JSON.stringify(baselineLog.slice(0, 1000))}`);
   check('Reset to Dev Baseline: safety snapshot → full reset → every step ✓', /Site rebuilt from blueprint/.test(baselineLog) && /✓ Apply \d+ baseline settings/.test(baselineLog) && !/✗/.test(baselineLog), baselineLog.match(/Site rebuilt[^\n]*/)?.[0]);
   await page.screenshot('19-baseline-done');
   check('session survives the baseline reset (fresh nonce hot-swapped)', (await page.eval(() => window.wpChrono.chronoNonce)) !== nonceBeforeBaseline);

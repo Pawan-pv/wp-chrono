@@ -202,6 +202,8 @@ final class ResetService {
 		$user_row       = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$wpdb->users} WHERE ID = %d", $user->ID ), ARRAY_A ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
 		$session_tokens = get_user_meta( $user->ID, 'session_tokens', true );
 		$options        = $this->capture_options( $keep_users );
+		// DIAGNOSTIC (STEP 2, remove in fix): permalink before reset.
+		error_log( sprintf( 'DIAG permalink before reset=%s captured=%s', var_export( get_option( 'permalink_structure', null ), true ), var_export( $options['permalink_structure'] ?? '(not captured)', true ) ) );
 		$stylesheet     = get_stylesheet();
 		$active_plugins = array_values( array_diff( (array) get_option( 'active_plugins', array() ), array( WP_CHRONO_BASENAME ) ) );
 		$step( sprintf( 'Captured admin "%s", %d options, theme and %d active plugins', $user_row['user_login'], count( $options ), count( $active_plugins ) ) );
@@ -252,6 +254,8 @@ final class ResetService {
 		Session::restore_options( $options );
 		update_option( 'active_plugins', array( WP_CHRONO_BASENAME ) );
 		wp_cache_flush();
+		// DIAGNOSTIC (STEP 2, remove in fix): permalink after restore.
+		error_log( sprintf( 'DIAG permalink after reset=%s', var_export( get_option( 'permalink_structure', null ), true ) ) );
 
 		if ( $keep_theme && $stylesheet !== get_stylesheet() && wp_get_theme( $stylesheet )->exists() ) {
 			switch_theme( $stylesheet );
