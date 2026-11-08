@@ -1,0 +1,103 @@
+# Plain Playwright E2E (AGENTS.md standards) on a throwaway @wordpress/env site.
+# The spec in e2e/ uses role/label locators, web-first assertions, no hard
+# sleeps, listens for JS errors from the plugin, and tails the site's
+# debug.log for PHP errors afterwards. Deep UI flows (snapshots, restore,
+# import, reset, blueprints) keep running in quick.yml/full.yml on the real
+# Docker stack via dev-env/tests/ui-e2e-checks.mjs — this workflow adds the
+# wp-env-on-a-runner round so no portion of E2E needs the local machine.
+#
+# State: every run gets a fresh wp-env install, so specs stay order-dependent
+# free without a db reset between them.
+name: playwright
+
+on:
+  push:
+    branches: ['**']
+    paths-ignore:
+      - '**.md'
+      - 'opencode.json'
+      - '.gitattributes'
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+concurrency:
+  group: playwright-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: e2e (wp-env, Playwright)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install npm dependencies
+        run: npm ci --no-audit --no-fund
+
+      # build/ is not committed; the plugin enqueues it.
+      - name: Build the admin app
+        run: npm run --silent build
+
+      - name: Cache Playwright browsers
+        id: pw-browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install Playwright Chromium (+ system deps)
+        run: npx playwright install --with-deps chromium
+
+      # ~/.wp-env holds the downloaded WordPress core; one download per job
+      # rather than per run.
+      - name: Cache wp-env core
+        id: wp-env-core
+        uses: actions/cache@v4
+        with:
+          path: ~/.wp-env
+          key: wp-env-core-${{ runner.os }}-${{ hashFiles('package-lock.json', '.wp-env.json') }}
+
+      - id: wp-env
+        name: Start wp-env (WordPress on :8888, WP_DEBUG on)
+        run: npx wp-env start
+
+      - name: Run Playwright specs
+        run: npx playwright test
+
+      # Zero-tolerance telemetry step (AGENTS.md): the specs watch the browser;
+      # this watches the server. Fails on any PHP error line pointing into the
+      # plugin, even if the spec run itself bailed before its afterAll.
+      - name: Inspect debug.log for PHP errors from the plugin
+        if: ${{ always() && steps.wp-env.outcome == 'success' }}
+        run: |
+          npx wp-env run cli tail -n 100 /var/www/html/wp-content/debug.log > "$RUNNER_TEMP/wp-debug.log" || true
+          cat "$RUNNER_TEMP/wp-debug.log"
+          ! grep -E 'PHP (Fatal error|Warning|Deprecated|Parse error)' "$RUNNER_TEMP/wp-debug.log" | grep wp-chrono
+
+      - name: Collect stack logs
+        if: failure()
+        run: mkdir -p test-results/e2e-logs && cp "$RUNNER_TEMP/wp-debug.log" test-results/e2e-logs/ 2>/dev/null || true
+
+      - name: Upload report and logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ github.run_attempt }}
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+          if-no-files-found: ignore
