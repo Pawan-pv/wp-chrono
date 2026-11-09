@@ -657,6 +657,7 @@ async function run() {
 
   // -- Blueprints (Milestone 3) -----------------------------------------------------------
   console.log('\n== Blueprints ==');
+  fixture('permalink-set'); // Self-contained: set pretty before capture so baseline carries it (dev start.sh does not).
   const BP_NAME = `E2E baseline ${RUN}`;
   await page.eval(() => (location.hash = '#/blueprints'));
   await page.waitFor(() => /Blueprints & Cloud/.test(document.querySelector('#wp-chrono-root').innerText) && !!document.querySelector('[data-e2e="cloud-panel"]'), [], 15000, 'blueprints view');
@@ -675,7 +676,6 @@ async function run() {
   await page.screenshot('18-blueprints');
 
   const nonceBeforeBaseline = await page.eval(() => window.wpChrono.chronoNonce);
-  fixture('permalink-set'); // Self-contained: do not depend on prod/start.sh setting pretty permalinks.
   const permBefore = fixture('permalink').PERMALINK ?? '';
   check('site starts with pretty permalinks', permBefore.includes('%postname%'), permBefore);
   await page.click('Reset to Dev Baseline', { scope: `[data-e2e-blueprint="${BP_NAME}"]` });
