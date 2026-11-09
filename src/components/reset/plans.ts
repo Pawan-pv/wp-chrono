@@ -49,10 +49,18 @@ const CONFIRM = 'RESET';
 const MAX_TICKS = 5000;
 
 /** After a full reset or restore the auth cookie is re-issued; old nonces are stale. */
-function adoptNonces(nonces: { rest: string; chrono: string } | null) {
+function adoptNonces(nonces: { rest: string; chrono: string } | null, restUrl?: string) {
+  if (restUrl) config.restUrl = restUrl;
   if (!nonces) return;
   config.restNonce = nonces.rest;
   config.chronoNonce = nonces.chrono;
+}
+
+/** Fetch fresh nonces from the server (needed after a full reset wipes nonces). */
+export async function refreshConfig(): Promise<void> {
+  const fresh = await api<{ rest: string; chrono: string }>('nonce');
+  config.restNonce = fresh.rest;
+  config.chronoNonce = fresh.chrono;
 }
 
 /** Runs build ticks until the snapshot is ready, reporting table progress. */
@@ -141,7 +149,7 @@ export function fullResetPlan(opts: { keep_theme: boolean; keep_plugins: boolean
       r.step('reset', 'done');
 
       r.step('session', 'running');
-      adoptNonces(result.nonces);
+      adoptNonces(result.nonces, result.restUrl);
       r.step('session', 'done');
       r.progress(1);
 
@@ -175,7 +183,12 @@ export function blueprintPlan(blueprint: Blueprint): ResetPlan {
         body: { confirm: CONFIRM, keep_theme: false, keep_plugins: false, keep_users: false },
       });
       reset.steps.forEach((s) => r.log(`${String(s.ms).padStart(6)} ms  ${s.label}`));
-      adoptNonces(reset.nonces);
+      adoptNonces(reset.nonces, reset.restUrl);
+      // After a full reset the WordPress nonce keys are regenerated. The nonces
+      // returned by reset/full should be fresh, but re-fetch via the nonce
+      // endpoint (which only needs the WordPress REST nonce, not the chrono
+      // nonce) to be sure the SPA's next request isn't rejected.
+      await refreshConfig();
       r.step('reset', 'done');
 
       r.step('apply', 'running');

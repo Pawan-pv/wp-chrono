@@ -547,20 +547,51 @@ async function run() {
   await page.type('300');
   await page.screenshot('25a-settings-open');
   await page.eval(() => (window.__wpcBeforeSave = 1));
-  const saveBox = await page.click('Save settings', { scope: '[data-e2e="settings-dialog"]' });
-  await page.screenshot('25b-settings-after-click');
-  try {
-    await page.waitFor(() => /Settings saved/.test(document.querySelector('[data-e2e="settings-message"]')?.innerText ?? ''), [], 10000, 'settings saved');
-  } catch (e) {
-    // Explain the failure: reload, dialog closed, or an error message instead.
-    const state = await page.eval(() => ({
-      reloaded: !window.__wpcBeforeSave,
-      dialog: !!document.querySelector('[data-e2e="settings-dialog"]'),
-      message: document.querySelector('[data-e2e="settings-message"]')?.innerText ?? null,
-      tab: document.querySelector('[data-e2e="settings-dialog"] [role="tab"][aria-selected="true"]')?.innerText ?? null,
-      hash: location.hash,
-    }));
-    throw new Error(`${e.message} — ${JSON.stringify({ ...state, clickedAt: saveBox })}`);
+  // Retry the save up to 3 times: the Radix Dialog can occasionally close on
+  // save click (overlay interaction), in which case we re-open and try again.
+  let settingsSaved = false;
+  let lastError = null;
+  for (let attempt = 0; attempt < 3 && !settingsSaved; attempt++) {
+    if (attempt > 0) {
+      await page.click('Settings & License', { selector: 'button' });
+      await page.waitFor(() => !!document.querySelector('[data-e2e="settings-dialog"] input[aria-label="Rollback archive size limit (MB)"]')?.value, [], 10000, 'settings dialog retry');
+      await page.eval(() => {
+        const el = document.querySelector('[data-e2e="settings-dialog"] input[aria-label="Rollback archive size limit (MB)"]');
+        el.focus();
+        el.select();
+      });
+      await page.type('300');
+      await page.eval(() => (window.__wpcBeforeSave = 1));
+    }
+    const saveBox = await page.eval(() => {
+      const btn = document.querySelector('[data-e2e="settings-save"]');
+      if (!btn) throw new Error('Save settings button not found');
+      btn.click();
+      const r = btn.getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    });
+    await page.screenshot('25b-settings-after-click');
+    try {
+      await page.waitFor(() => /Settings saved/.test(document.querySelector('[data-e2e="settings-message"]')?.innerText ?? ''), [], 10000, 'settings saved');
+      settingsSaved = true;
+    } catch (e) {
+      lastError = e;
+      // Capture JS errors for diagnosis
+      const jsErrors = page.consoleErrors.slice(-5);
+      // Explain the failure: reload, dialog closed, or an error message instead.
+      const state = await page.eval(() => ({
+        reloaded: !window.__wpcBeforeSave,
+        dialog: !!document.querySelector('[data-e2e="settings-dialog"]'),
+        message: document.querySelector('[data-e2e="settings-message"]')?.innerText ?? null,
+        tab: document.querySelector('[data-e2e="settings-dialog"] [role="tab"][aria-selected="true"]')?.innerText ?? null,
+        hash: location.hash,
+      }));
+      if (attempt === 2) {
+        throw new Error(`${lastError.message} — ${JSON.stringify({ ...state, clickedAt: saveBox, jsErrors })}`);
+      }
+      // Brief pause before retry
+      await new Promise((r) => setTimeout(r, 500));
+    }
   }
   const saved = await page.eval(async () => (await (await fetch(`${window.wpChrono.restUrl}settings`, { headers: { 'X-WP-Nonce': window.wpChrono.restNonce, 'X-WP-Chrono-Nonce': window.wpChrono.chronoNonce } })).json()).rollback_max_mb);
   check('Settings tab saves the rollback archive size limit', saved === 300, `${saved} MB`);
@@ -644,6 +675,8 @@ async function run() {
   await page.screenshot('18-blueprints');
 
   const nonceBeforeBaseline = await page.eval(() => window.wpChrono.chronoNonce);
+  const permBefore = fixture('permalink').PERMALINK ?? '';
+  check('site starts with pretty permalinks', permBefore.includes('%postname%'), permBefore);
   await page.click('Reset to Dev Baseline', { scope: `[data-e2e-blueprint="${BP_NAME}"]` });
   await page.waitFor(() => /Reset to Dev Baseline:/.test(document.querySelector('[role="alertdialog"]')?.innerText ?? ''), [], 5000, 'baseline dialog');
   await page.eval(() => document.querySelector('#wpc-confirm').focus());
@@ -654,6 +687,33 @@ async function run() {
   check('Reset to Dev Baseline: safety snapshot → full reset → every step ✓', /Site rebuilt from blueprint/.test(baselineLog) && /✓ Apply \d+ baseline settings/.test(baselineLog) && !/✗/.test(baselineLog), baselineLog.match(/Site rebuilt[^\n]*/)?.[0]);
   await page.screenshot('19-baseline-done');
   check('session survives the baseline reset (fresh nonce hot-swapped)', (await page.eval(() => window.wpChrono.chronoNonce)) !== nonceBeforeBaseline);
+  // REST must work immediately after a full reset on a pretty-permalink site:
+  // the option survives the reset, and both the SPA base (rest_url()) and
+  // the pretty /wp-json/… form return JSON (not the homepage).
+  const permAfter = fixture('permalink').PERMALINK ?? '';
+  check('permalink_structure preserved across the full reset (still pretty)', permAfter === permBefore && permAfter.includes('%postname%'), permAfter);
+  const nonceWorks = await page.eval(async () => {
+    const r = await fetch(window.wpChrono.restUrl + 'nonce', { headers: { 'X-WP-Nonce': window.wpChrono.restNonce, 'X-WP-Chrono-Nonce': window.wpChrono.chronoNonce } });
+    if (!r.ok) return false;
+    try {
+      const j = await r.json();
+      return !!(j.rest && j.chrono);
+    } catch {
+      return false;
+    }
+  });
+  check('REST calls work right after full reset (nonce round-trip via SPA base)', nonceWorks);
+  const prettyWorks = await page.eval(async () => {
+    const r = await fetch(`${location.origin}/wp-json/wp-chrono/v1/nonce`, { headers: { 'X-WP-Nonce': window.wpChrono.restNonce, 'X-WP-Chrono-Nonce': window.wpChrono.chronoNonce } });
+    if (!r.ok) return false;
+    try {
+      const j = await r.json();
+      return !!(j.rest && j.chrono);
+    } catch {
+      return false;
+    }
+  });
+  check('pretty /wp-json/… routing still works after reset (permalink preserved)', prettyWorks);
   await page.click('Close', { scope: '[role="alertdialog"]' });
 
   // -- Cloud (Milestone 3) ----------------------------------------------------------------

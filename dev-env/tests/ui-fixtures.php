@@ -15,6 +15,9 @@ require '/tests/lib/upgrade-helpers.php';
 
 $file = 'wpc-ui-roll/wpc-ui-roll.php';
 switch ( $args[0] ?? '' ) {
+	case 'permalink': // Current permalink_structure, for the post-reset REST check.
+		echo 'PERMALINK=' . var_export( get_option( 'permalink_structure' ), true ) . "\n";
+		break;
 	case 'rollback':
 		Settings::update( array( 'auto_snapshot' => true ) );
 		wpc_install_plugin( 'wpc-ui-roll', '1.0' );
