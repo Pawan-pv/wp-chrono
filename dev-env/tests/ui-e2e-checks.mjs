@@ -657,6 +657,7 @@ async function run() {
 
   // -- Blueprints (Milestone 3) -----------------------------------------------------------
   console.log('\n== Blueprints ==');
+  fixture('permalink-set'); // Self-contained: set pretty before capture so baseline carries it (dev start.sh does not).
   const BP_NAME = `E2E baseline ${RUN}`;
   await page.eval(() => (location.hash = '#/blueprints'));
   await page.waitFor(() => /Blueprints & Cloud/.test(document.querySelector('#wp-chrono-root').innerText) && !!document.querySelector('[data-e2e="cloud-panel"]'), [], 15000, 'blueprints view');
