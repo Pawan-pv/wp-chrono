@@ -157,6 +157,12 @@ Settings & License (the gear icon) → License, paste the key and click Activate
 
 == Changelog ==
 
+= 1.0.4 =
+* New: storage cap for snapshots — a GB cap plus a minimum autos to keep when over the cap. Oldest auto-snapshots are deleted first; manual, pinned and the latest update snapshot are never auto-deleted.
+* Fix: auto_retention is now always respected when under the GB cap, and the GB cap never deletes below the minimum autos setting.
+* Fix: pinned snapshots and Safe Updates undo snapshots are protected during retention cleanup.
+* Fix: disk-space check skips a pre-update snapshot instead of filling the disk.
+
 = 1.0.3 =
 * Safety: Safe Updates no longer rolls the database back when visitors created new orders, comments, users or posts after the update started; it puts the files back and tells you. A failure must now repeat on three checks before anything is undone, and HTTP 503 (maintenance) never counts.
 * Safety: on databases shared by several WordPress installs (one table prefix each), resets, snapshots, restores and uninstall no longer touch another install's tables (for example `wp_shop_*` next to `wp_*`).
@@ -191,6 +197,9 @@ Settings & License (the gear icon) → License, paste the key and click Activate
 * Pro: Blueprints (Reset to Dev Baseline) and bring-your-own-bucket cloud offload; offline Ed25519 license keys.
 
 == Upgrade Notice ==
+
+= 1.0.4 =
+Storage cap: the GB cap only trims oldest auto-snapshots and never below the minimum autos setting. Recommended for sites with many snapshots.
 
 = 1.0.3 =
 Security and data-safety release: Safe Updates never deletes new orders or comments, safer cloud pulls and imports, shared-database fixes. Recommended for everyone.
