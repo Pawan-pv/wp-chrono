@@ -62,9 +62,9 @@ final class Commands {
 			array( 'metric' => '  Snapshot tables', 'value' => size_format( $usage['snapshot_bytes'], 1 ) ),
 			array( 'metric' => '  Archives + exports', 'value' => size_format( $usage['file_bytes'], 1 ) ),
 			array( 'metric' => 'Storage cap (GB)',  'value' => $settings['storage_cap_gb'] . ' GB (' . size_format( $usage['cap_bytes'], 1 ) . ')' ),
-			array( 'metric' => 'Auto-snapshot cap', 'value' => $settings['storage_cap_autos'] ),
+			array( 'metric' => 'Min autos kept over cap', 'value' => $settings['storage_cap_autos'] ),
 			array( 'metric' => 'Over byte cap',     'value' => $usage['cap_used_bytes'] ? 'yes' : 'no' ),
-			array( 'metric' => 'Over auto cap',     'value' => $usage['cap_used_autos'] ? 'yes' : 'no' ),
+			array( 'metric' => 'Autos above floor', 'value' => $usage['cap_used_autos'] ? 'yes' : 'no' ),
 			array( 'metric' => 'Disk free',         'value' => null === $usage['free_bytes'] ? 'unknown' : size_format( $usage['free_bytes'], 1 ) ),
 			array( 'metric' => 'Storage protected', 'value' => $usage['protected'] ? 'yes' : 'no' ),
 		);
@@ -85,7 +85,7 @@ final class Commands {
 	 * : Only report what would be deleted, without deleting anything.
 	 *
 	 * [--keep=<autos>]
-	 * : Number of auto-snapshots to keep (overrides the storage_cap_autos setting).
+	 * : Minimum auto-snapshots to keep when over the GB cap (overrides the storage_cap_autos floor).
 	 *
 	 * ## EXAMPLES
 	 *
@@ -102,7 +102,10 @@ final class Commands {
 
 		if ( WP_CLI\Utils\get_flag_value( $assoc_args, 'dry-run', false ) ) {
 			$settings = Settings::get();
-			$capAutos = null === $keep ? $settings['storage_cap_autos'] : $keep;
+			$floorAutos = null === $keep ? $settings['storage_cap_autos'] : $keep;
+			$usage = ( new SiteInspector() )->storage_usage();
+			$totalBytes = (int) $usage['total_bytes'];
+			$capBytes = (int) $usage['cap_bytes'];
 			$autos = array_values(
 				array_filter(
 					$service->all(),
@@ -115,6 +118,7 @@ final class Commands {
 
 			$lock = get_transient( SnapshotService::AUTO_LOCK );
 			$lockId = is_array( $lock ) ? (int) ( $lock['snapshot'] ?? 0 ) : 0;
+			$autoCount = count( $autos );
 
 			$wouldDelete = array();
 			foreach ( $autos as $snap ) {
@@ -122,10 +126,19 @@ final class Commands {
 				if ( $id === $lockId || $service->is_pinned( $id ) ) {
 					continue;
 				}
-				if ( count( $wouldDelete ) >= max( 0, count( $autos ) - $capAutos ) ) {
+				if ( $totalBytes <= $capBytes || $autoCount <= $floorAutos ) {
 					break;
 				}
+				$size = (int) ( $snap['size_bytes'] ?? 0 );
+				foreach ( (array) ( $snap['meta']['rollback']['files'] ?? array() ) as $f ) {
+					$size += (int) ( $f['bytes'] ?? 0 );
+				}
+				foreach ( (array) ( $snap['meta']['exports'] ?? array() ) as $e ) {
+					$size += (int) ( $e['bytes'] ?? 0 );
+				}
 				$wouldDelete[] = $id;
+				$totalBytes -= $size;
+				$autoCount--;
 			}
 
 			WP_CLI\Utils\format_items(

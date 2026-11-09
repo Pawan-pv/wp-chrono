@@ -819,10 +819,19 @@ final class SnapshotService {
 				}
 			)
 		);
+		// Pinned snapshots and the snapshot the auto-update lock points at
+		// (Safe Updates' undo target) are never auto-deleted, even when
+		// retention would otherwise remove them.
+		$lock   = get_transient( self::AUTO_LOCK );
+		$lockId = is_array( $lock ) ? (int) ( $lock['snapshot'] ?? 0 ) : 0;
 		$deleted = array();
 		foreach ( array_slice( $autos, $keep ) as $old ) {
-			if ( true === $this->delete( $old['id'] ) ) {
-				$deleted[] = $old['id'];
+			$id = (int) $old['id'];
+			if ( $id === $lockId || $this->is_pinned( $id ) ) {
+				continue;
+			}
+			if ( true === $this->delete( $id ) ) {
+				$deleted[] = $id;
 			}
 		}
 		return $deleted;
@@ -856,18 +865,21 @@ final class SnapshotService {
 	}
 
 	/**
-	 * Enforce the storage cap: delete oldest auto-snapshots first until total
-	 * storage is under the GB cap and the auto-snapshot count is under the
-	 * count cap. Never deletes manual snapshots, pinned snapshots, or the
-	 * snapshot referenced by the auto-update lock (the one needed to undo the
-	 * most recent update). Warns the admin if the cap can't be met.
+	 * Enforce the GB cap: when over the size cap, delete oldest auto-snapshots
+	 * first, but never below storage_cap_autos (the floor). When under the
+	 * size cap, nothing is deleted here — auto_retention is the count cap and
+	 * is enforced separately by prune_auto(). Never deletes manual snapshots,
+	 * pinned snapshots, or the snapshot referenced by the auto-update lock
+	 * (the one needed to undo the most recent update). Warns the admin if the
+	 * cap can't be met without breaking the floor or protected snapshots.
 	 *
+	 * @param int|null $keep_autos Floor: minimum autos to keep (default: the storage_cap_autos setting).
 	 * @return int[] IDs deleted.
 	 */
 	public function enforce_storage_cap( ?int $keep_autos = null ): array {
 		$settings = Settings::get();
 		$capBytes = $settings['storage_cap_gb'] * GB_IN_BYTES;
-		$capAutos = null === $keep_autos ? $settings['storage_cap_autos'] : $keep_autos;
+		$floorAutos = null === $keep_autos ? $settings['storage_cap_autos'] : $keep_autos;
 
 		$usage = ( new SiteInspector() )->storage_usage();
 		$totalBytes = (int) $usage['total_bytes'];
@@ -893,7 +905,7 @@ final class SnapshotService {
 			if ( $id === $lockId || $this->is_pinned( $id ) ) {
 				continue; // Never auto-delete these.
 			}
-			if ( $totalBytes <= $capBytes && $autoCount <= $capAutos ) {
+			if ( $totalBytes <= $capBytes || $autoCount <= $floorAutos ) {
 				break;
 			}
 

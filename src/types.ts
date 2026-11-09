@@ -39,13 +39,13 @@ export interface StorageUsage {
   prunable: { count: number; bytes: number };
   /** Storage cap (bytes). */
   cap_bytes: number;
-  /** Max auto-snapshots to keep. */
+  /** Minimum auto-snapshots kept when over the GB cap (floor, not a ceiling). */
   cap_autos: number;
   /** Total bytes above the cap. */
   cap_used_bytes: boolean;
-  /** Auto-snapshot count above the cap. */
+  /** Auto-snapshot count above the floor (reporting only). */
   cap_used_autos: boolean;
-  /** Either cap is exceeded. */
+  /** Total bytes above the GB cap. */
   over_cap: boolean;
 }
 
@@ -258,7 +258,7 @@ export interface ChronoSettings {
   auto_retention: number;
   /** Maximum total storage for snapshots, archives and exports, in GB. */
   storage_cap_gb: number;
-  /** Maximum number of auto-snapshots to keep. */
+  /** Minimum auto-snapshots kept when over the GB cap. */
   storage_cap_autos: number;
   storage_warn_mb: number;
   rollback_max_mb: number;

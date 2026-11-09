@@ -315,6 +315,93 @@ wpc_check( 'toggle off => no auto-snapshot', 0 === $new_autos( $before ) );
 Settings::update( array( 'auto_snapshot' => true, 'auto_retention' => 5 ) );
 
 // ---------------------------------------------------------------------------
+echo "\n== Storage cap vs auto_retention (table rows) ==\n";
+// auto_retention is the count cap when under the GB cap; storage_cap_autos
+// is only a floor the GB cleanup may not go below. Fast fake snapshots
+// (no copied tables) exercise prune_auto() + enforce_storage_cap() exactly
+// as SnapshotService::build() does (prune first, then cap).
+$wpc_seq = 0;
+$wpc_fake = static function ( string $trigger, int $size = 1024, string $label = 'wpc-fake' ) use ( $wpdb, &$wpc_seq ) {
+	$table = WPChrono\Core\Schema::snapshots_table();
+	$wpc_seq++;
+	$wpdb->insert(
+		$table,
+		array(
+			'uid'          => wp_generate_password( 32, false ),
+			'label'        => $label,
+			'trigger_type' => $trigger,
+			'status'       => 'ready',
+			'size_bytes'   => $size,
+			'meta'         => wp_json_encode( array() ),
+			'created_at'   => gmdate( 'Y-m-d H:i:s', time() + $wpc_seq ),
+		)
+	);
+	return (int) $wpdb->insert_id;
+};
+$wpc_count = static function ( string $trigger ) use ( $service ) {
+	return count( array_filter( $service->all(), static function ( $s ) use ( $trigger ) { return $trigger === $s['trigger_type'] && 'ready' === $s['status'] && 0 === strpos( (string) $s['label'], 'wpc-fake' ); } ) );
+};
+$wpc_fakes = static function ( string $trigger ) use ( $service ) {
+	return array_values( array_filter( $service->all(), static function ( $s ) use ( $trigger ) { return $trigger === $s['trigger_type'] && 'ready' === $s['status'] && 0 === strpos( (string) $s['label'], 'wpc-fake' ); } ) );
+};
+$wpc_cleanup = static function () use ( $service ) {
+	foreach ( $service->all() as $s ) {
+		if ( 'ready' === $s['status'] && ( 'auto' === $s['trigger_type'] || 'manual' === $s['trigger_type'] ) && 0 === strpos( (string) $s['label'], 'wpc-fake' ) ) {
+			$service->delete( (int) $s['id'] );
+		}
+	}
+	delete_transient( SnapshotService::AUTO_LOCK );
+	delete_transient( 'wp_chrono_storage_cap_notice' );
+};
+$wpc_base = $max_id();
+// Row 1: retention 5, GB 1, floor 3, under cap → keep 5, manual kept, pinned/locked kept.
+Settings::update( array( 'auto_retention' => 5, 'storage_cap_gb' => 1, 'storage_cap_autos' => 3 ) );
+for ( $i = 0; $i < 7; $i++ ) { $wpc_fake( 'auto', 1024, 'wpc-fake r1 auto ' . $i ); }
+$wpc_fake( 'manual', 1024, 'wpc-fake r1 manual' );
+$oldest1 = array_column( $wpc_fakes( 'auto' ), 'id' );
+sort( $oldest1 );
+$locked1 = (int) $oldest1[0];
+set_transient( SnapshotService::AUTO_LOCK, array( 'snapshot' => $locked1 ), SnapshotService::AUTO_LOCK_TTL );
+$service->prune_auto(); $service->enforce_storage_cap();
+$kept1 = $wpc_count( 'auto' );
+wpc_check( 'row1 retention5/cap1GB/floor3 under cap keeps 5 autos (+ locked oldest)', 6 === $kept1, "kept {$kept1}" );
+wpc_check( 'row1 manual never deleted', 1 === $wpc_count( 'manual' ) );
+wpc_check( 'row1 AUTO_LOCK snapshot kept by prune', false !== $service->get( $locked1 ) && ! is_wp_error( $service->get( $locked1 ) ) );
+$wpc_cleanup();
+// Row 2: retention 5, GB 1, floor 3, over cap → deletes oldest but never below 3.
+Settings::update( array( 'auto_retention' => 5, 'storage_cap_gb' => 1, 'storage_cap_autos' => 3 ) );
+for ( $i = 0; $i < 5; $i++ ) { $wpc_fake( 'auto', 10485760, 'wpc-fake r2 auto ' . $i ); }
+$wpc_fake( 'manual', 1024, 'wpc-fake r2 manual' );
+$dir2 = Storage::ensure();
+$sparse2 = is_wp_error( $dir2 ) ? '' : $dir2 . 'wpc-test-overcap.bin';
+if ( '' !== $sparse2 ) { $fh2 = fopen( $sparse2, 'w' ); if ( $fh2 ) { ftruncate( $fh2, 1153433600 ); fclose( $fh2 ); } }
+$service->prune_auto(); $service->enforce_storage_cap();
+$kept2 = $wpc_count( 'auto' );
+wpc_check( 'row2 over GB cap deletes oldest but keeps floor 3', 3 === $kept2, "kept {$kept2}" );
+wpc_check( 'row2 manual kept when over cap', 1 === $wpc_count( 'manual' ) );
+if ( '' !== $sparse2 && file_exists( $sparse2 ) ) { unlink( $sparse2 ); }
+$wpc_cleanup();
+// Row 3: retention 2, GB 1, floor 3, under cap → keep 2.
+Settings::update( array( 'auto_retention' => 2, 'storage_cap_gb' => 1, 'storage_cap_autos' => 3 ) );
+for ( $i = 0; $i < 4; $i++ ) { $wpc_fake( 'auto', 1024, 'wpc-fake r3 auto ' . $i ); }
+$wpc_fake( 'manual', 1024, 'wpc-fake r3 manual' );
+$service->prune_auto(); $service->enforce_storage_cap();
+$kept3 = $wpc_count( 'auto' );
+wpc_check( 'row3 retention2 under cap keeps 2 autos', 2 === $kept3, "kept {$kept3}" );
+wpc_check( 'row3 manual kept', 1 === $wpc_count( 'manual' ) );
+$wpc_cleanup();
+// Row 4: retention 10, GB 1, floor 3, under cap → keep 10 (floor is not a ceiling).
+Settings::update( array( 'auto_retention' => 10, 'storage_cap_gb' => 1, 'storage_cap_autos' => 3 ) );
+for ( $i = 0; $i < 12; $i++ ) { $wpc_fake( 'auto', 1024, 'wpc-fake r4 auto ' . $i ); }
+$wpc_fake( 'manual', 1024, 'wpc-fake r4 manual' );
+$service->prune_auto(); $service->enforce_storage_cap();
+$kept4 = $wpc_count( 'auto' );
+wpc_check( 'row4 retention10 under cap keeps 10 autos (not 3)', 10 === $kept4, "kept {$kept4}" );
+wpc_check( 'row4 manual kept', 1 === $wpc_count( 'manual' ) );
+$wpc_cleanup();
+Settings::update( array( 'auto_retention' => 5, 'storage_cap_gb' => 1, 'storage_cap_autos' => 3 ) );
+
+// ---------------------------------------------------------------------------
 echo "\n== Safety snapshot hook (Phase 2 wiring) ==\n";
 $pre = ( new ResetService() )->preflight( 'transients', true );
 wpc_check( 'reset preflight creates a real safety snapshot', is_array( $pre['snapshot'] ) && 'safety' === $pre['snapshot']['trigger_type'] && 'ready' === $pre['snapshot']['status'], $pre['log'][1] ?? '' );

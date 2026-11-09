@@ -187,10 +187,10 @@ export function SettingsDialog({ open, onOpenChange, tab, onTabChange }: Setting
             </label>
             <label className="flex items-center justify-between gap-4 text-sm">
               <span className="flex flex-col">
-                <span className="text-sm font-medium">Max auto-snapshots to keep</span>
-                <span className="text-xs text-muted-foreground">Oldest auto-snapshots are deleted first when this is exceeded.</span>
+                <span className="text-sm font-medium">Min auto-snapshots to keep when over GB cap</span>
+                <span className="text-xs text-muted-foreground">The GB cap never deletes below this many auto-snapshots. The count cap is set by “Keep the last … auto-snapshots”.</span>
               </span>
-              <Input type="number" min={1} max={50} className="w-24" value={settings?.storage_cap_autos ?? ''} onChange={(e) => num('storage_cap_autos', e.target.value)} aria-label="Max auto-snapshots to keep" />
+              <Input type="number" min={1} max={50} className="w-24" value={settings?.storage_cap_autos ?? ''} onChange={(e) => num('storage_cap_autos', e.target.value)} aria-label="Min auto-snapshots to keep when over GB cap" />
             </label>
             <label className="flex items-center justify-between gap-4 text-sm">
               <span className="flex flex-col">

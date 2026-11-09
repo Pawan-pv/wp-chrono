@@ -296,13 +296,13 @@ export function Snapshots({ params, clearParams }: SnapshotsProps) {
           </select>
         </label>
         <label className="flex items-center gap-3 text-sm">
-          Max auto-snapshots
+          Min auto-snapshots kept when over cap
           <select
             value={settings?.storage_cap_autos ?? 3}
             disabled={!settings}
             onChange={(e) => saveSettings({ storage_cap_autos: Number(e.target.value) })}
             className="h-8 rounded-md border border-input bg-background px-2 text-sm"
-            aria-label="Max auto-snapshots"
+            aria-label="Min auto-snapshots kept when over cap"
           >
             {[1, 3, 5, 10, 20].map((n) => (
               <option key={n} value={n}>

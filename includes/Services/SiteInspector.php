@@ -71,7 +71,9 @@ final class SiteInspector {
 			$prunable = array( 'count' => count( $older ), 'bytes' => array_sum( $older ) );
 		}
 
-		// Storage cap: total GB limit and auto-snapshot count limit.
+		// Storage cap: GB cap is the hard limit; storage_cap_autos is the floor
+		// the GB cleanup may not go below (not a count ceiling — auto_retention
+		// is the count cap). `cap_used_autos` is kept for reporting only.
 		$settings       = Settings::get();
 		$capBytes       = (int) $settings['storage_cap_gb'] * GB_IN_BYTES;
 		$capAutos       = (int) $settings['storage_cap_autos'];
@@ -97,7 +99,7 @@ final class SiteInspector {
 			'cap_autos'       => $capAutos,
 			'cap_used_bytes'  => $total > $capBytes,
 			'cap_used_autos'  => count( $readyAutos ) > $capAutos,
-			'over_cap'        => $total > $capBytes || count( $readyAutos ) > $capAutos,
+			'over_cap'        => $total > $capBytes,
 		);
 	}
 
