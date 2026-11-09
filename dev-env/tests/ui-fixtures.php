@@ -18,6 +18,15 @@ switch ( $args[0] ?? '' ) {
 	case 'permalink': // Current permalink_structure, for the post-reset REST check.
 		echo 'PERMALINK=' . var_export( get_option( 'permalink_structure' ), true ) . "\n";
 		break;
+	case 'permalink-set': // Set pretty permalinks so the check does not depend on prod/start.sh.
+		global $wp_rewrite;
+		update_option( 'permalink_structure', '/%postname%/', false );
+		if ( isset( $wp_rewrite ) ) {
+			$wp_rewrite->set_permalink_structure( '/%postname%/' );
+			$wp_rewrite->flush_rules();
+		}
+		echo 'PERMALINK=' . var_export( get_option( 'permalink_structure' ), true ) . "\n";
+		break;
 	case 'rollback':
 		Settings::update( array( 'auto_snapshot' => true ) );
 		wpc_install_plugin( 'wpc-ui-roll', '1.0' );

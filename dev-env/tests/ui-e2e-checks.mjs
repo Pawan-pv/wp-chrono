@@ -675,6 +675,7 @@ async function run() {
   await page.screenshot('18-blueprints');
 
   const nonceBeforeBaseline = await page.eval(() => window.wpChrono.chronoNonce);
+  fixture('permalink-set'); // Self-contained: do not depend on prod/start.sh setting pretty permalinks.
   const permBefore = fixture('permalink').PERMALINK ?? '';
   check('site starts with pretty permalinks', permBefore.includes('%postname%'), permBefore);
   await page.click('Reset to Dev Baseline', { scope: `[data-e2e-blueprint="${BP_NAME}"]` });
