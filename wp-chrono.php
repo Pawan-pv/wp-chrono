@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       WP Chrono
  * Description:       Reset, snapshot, recovery and blueprint toolkit for WordPress developers.
- * Version:           1.0.3
+ * Version:           1.0.4
  * Requires at least: 6.3
  * Requires PHP:      7.4
  * Update URI:        https://wp-chrono-api.wordpress-plugin.workers.dev/wp-chrono
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'WP_CHRONO_VERSION', '1.0.3' );
+define( 'WP_CHRONO_VERSION', '1.0.4' );
 define( 'WP_CHRONO_FILE', __FILE__ );
 define( 'WP_CHRONO_DIR', plugin_dir_path( __FILE__ ) );
 define( 'WP_CHRONO_URL', plugin_dir_url( __FILE__ ) );
