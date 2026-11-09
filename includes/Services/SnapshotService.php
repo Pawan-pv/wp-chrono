@@ -196,6 +196,7 @@ final class SnapshotService {
 			$ready = $this->get( $id );
 			do_action( 'wp_chrono_snapshot_ready', $ready );
 			if ( 'auto' === $ready['trigger_type'] ) {
+				$this->prune_auto();
 				$this->enforce_storage_cap();
 			}
 		}
