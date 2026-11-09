@@ -106,7 +106,7 @@ final class Commands {
 			$autos = array_values(
 				array_filter(
 					$service->all(),
-					static function ( $s ) use ( $capAutos ) {
+					static function ( $s ) {
 						return 'auto' === $s['trigger_type'] && 'ready' === $s['status'];
 					}
 				)
