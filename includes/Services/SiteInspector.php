@@ -71,15 +71,35 @@ final class SiteInspector {
 			$prunable = array( 'count' => count( $older ), 'bytes' => array_sum( $older ) );
 		}
 
+		// Storage cap: GB cap is the hard limit; storage_cap_autos is the floor
+		// the GB cleanup may not go below (not a count ceiling — auto_retention
+		// is the count cap). `cap_used_autos` is kept for reporting only.
+		$settings       = Settings::get();
+		$capBytes       = (int) $settings['storage_cap_gb'] * GB_IN_BYTES;
+		$capAutos       = (int) $settings['storage_cap_autos'];
+		$readyAutos     = array_filter(
+			$wpdb->get_col( $wpdb->prepare( "SELECT id FROM {$table} WHERE trigger_type = %s AND status = %s ORDER BY created_at DESC, id DESC", 'auto', 'ready' ) ), // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+			static function ( $id ) {
+				return '' !== $id;
+			}
+		);
+
 		return array(
 			'snapshot_bytes'  => $snapshot_bytes,
 			'file_bytes'      => $file_bytes,
 			'total_bytes'     => $total,
 			'threshold_bytes' => $threshold,
 			'free_bytes'      => $free_bytes,
+			'protected'       => Storage::is_protected(),
 			'warn'            => null !== $reason,
 			'reason'          => $reason,
 			'prunable'        => $prunable,
+			// Storage cap.
+			'cap_bytes'       => $capBytes,
+			'cap_autos'       => $capAutos,
+			'cap_used_bytes'  => $total > $capBytes,
+			'cap_used_autos'  => count( $readyAutos ) > $capAutos,
+			'over_cap'        => $total > $capBytes,
 		);
 	}
 

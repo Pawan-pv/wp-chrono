@@ -15,6 +15,7 @@ namespace WPChrono\Services;
 
 use WP_Error;
 use WPChrono\Core\Schema;
+use WPChrono\Core\Storage;
 use WPChrono\Services\Snapshot\Exporter;
 use WPChrono\Services\Snapshot\FileArchive;
 use WPChrono\Services\Snapshot\Restorer;
@@ -32,6 +33,9 @@ final class SnapshotService {
 	const AUTO_LOCK = '_wpchrono_auto_snap_lock';
 
 	const AUTO_LOCK_TTL = 180;
+
+	/** Below this much free disk space, skip the snapshot and warn the admin. */
+	const MIN_FREE_BYTES = 500 * MB_IN_BYTES;
 
 	// ---------------------------------------------------------------------
 	// Creation
@@ -193,6 +197,7 @@ final class SnapshotService {
 			do_action( 'wp_chrono_snapshot_ready', $ready );
 			if ( 'auto' === $ready['trigger_type'] ) {
 				$this->prune_auto();
+				$this->enforce_storage_cap();
 			}
 		}
 
@@ -639,6 +644,12 @@ final class SnapshotService {
 		$service = new self();
 		$lock    = get_transient( self::AUTO_LOCK );
 		if ( false === $lock ) {
+			// Disk-space check: never let a snapshot fill a small shared-hosting disk.
+			if ( ! self::disk_space_ok() ) {
+				self::notify_low_disk();
+				error_log( 'WP Chrono: auto-snapshot skipped — free disk space below ' . size_format( self::MIN_FREE_BYTES ) . '.' ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions
+				return $response;
+			}
 			set_transient( self::AUTO_LOCK, array( 'snapshot' => 0 ), self::AUTO_LOCK_TTL );
 			// Probe before anything is replaced: the baseline Safe Updates compares against.
 			$baseline = SafeUpdates::enabled() ? SafeUpdates::probe() : null;
@@ -808,12 +819,188 @@ final class SnapshotService {
 				}
 			)
 		);
+		// Pinned snapshots and the snapshot the auto-update lock points at
+		// (Safe Updates' undo target) are never auto-deleted, even when
+		// retention would otherwise remove them.
+		$lock   = get_transient( self::AUTO_LOCK );
+		$lockId = is_array( $lock ) ? (int) ( $lock['snapshot'] ?? 0 ) : 0;
 		$deleted = array();
 		foreach ( array_slice( $autos, $keep ) as $old ) {
-			if ( true === $this->delete( $old['id'] ) ) {
-				$deleted[] = $old['id'];
+			$id = (int) $old['id'];
+			if ( $id === $lockId || $this->is_pinned( $id ) ) {
+				continue;
+			}
+			if ( true === $this->delete( $id ) ) {
+				$deleted[] = $id;
 			}
 		}
 		return $deleted;
+	}
+
+	// ---------------------------------------------------------------------
+	// Storage cap & pinning
+	// ---------------------------------------------------------------------
+
+	/**
+	 * Whether a snapshot is pinned (never auto-deleted by the storage cap).
+	 */
+	public function is_pinned( int $id ): bool {
+		$snapshot = $this->get( $id );
+		return is_wp_error( $snapshot ) ? false : ! empty( $snapshot['meta']['pinned'] );
+	}
+
+	/**
+	 * Pin or unpin a snapshot. Pinned snapshots are never auto-deleted.
+	 *
+	 * @return true|WP_Error
+	 */
+	public function set_pinned( int $id, bool $pinned ) {
+		$snapshot = $this->get( $id );
+		if ( is_wp_error( $snapshot ) ) {
+			return $snapshot;
+		}
+		$this->update_meta( $id, array( 'pinned' => $pinned ) );
+		do_action( 'wp_chrono_snapshot_pinned', $id, $pinned );
+		return true;
+	}
+
+	/**
+	 * Enforce the GB cap: when over the size cap, delete oldest auto-snapshots
+	 * first, but never below storage_cap_autos (the floor). When under the
+	 * size cap, nothing is deleted here — auto_retention is the count cap and
+	 * is enforced separately by prune_auto(). Never deletes manual snapshots,
+	 * pinned snapshots, or the snapshot referenced by the auto-update lock
+	 * (the one needed to undo the most recent update). Warns the admin if the
+	 * cap can't be met without breaking the floor or protected snapshots.
+	 *
+	 * @param int|null $keep_autos Floor: minimum autos to keep (default: the storage_cap_autos setting).
+	 * @return int[] IDs deleted.
+	 */
+	public function enforce_storage_cap( ?int $keep_autos = null ): array {
+		$settings = Settings::get();
+		$capBytes = $settings['storage_cap_gb'] * GB_IN_BYTES;
+		$floorAutos = null === $keep_autos ? $settings['storage_cap_autos'] : $keep_autos;
+
+		$usage = ( new SiteInspector() )->storage_usage();
+		$totalBytes = (int) $usage['total_bytes'];
+
+		// Autos, oldest first (`all()` is newest first).
+		$autos = array_values(
+			array_filter(
+				$this->all(),
+				static function ( $s ) {
+					return 'auto' === $s['trigger_type'] && 'ready' === $s['status'];
+				}
+			)
+		);
+		$autos = array_reverse( $autos );
+
+		$lock     = get_transient( self::AUTO_LOCK );
+		$lockId   = is_array( $lock ) ? (int) ( $lock['snapshot'] ?? 0 ) : 0;
+		$autoCount = count( $autos );
+		$deleted  = array();
+
+		foreach ( $autos as $snap ) {
+			$id = (int) $snap['id'];
+			if ( $id === $lockId || $this->is_pinned( $id ) ) {
+				continue; // Never auto-delete these.
+			}
+			if ( $totalBytes <= $capBytes || $autoCount <= $floorAutos ) {
+				break;
+			}
+
+			// Bytes this snapshot occupies: DB copies + its rollback archives + exports.
+			$size = (int) ( $snap['size_bytes'] ?? 0 );
+			foreach ( (array) ( $snap['meta']['rollback']['files'] ?? array() ) as $f ) {
+				$size += (int) ( $f['bytes'] ?? 0 );
+			}
+			foreach ( (array) ( $snap['meta']['exports'] ?? array() ) as $e ) {
+				$size += (int) ( $e['bytes'] ?? 0 );
+			}
+
+			if ( true === $this->delete( $id ) ) {
+				$deleted[]   = $id;
+				$totalBytes -= $size;
+				$autoCount--;
+			}
+		}
+
+		// Still over the byte cap after deleting every deletable auto: warn.
+		if ( $totalBytes > $capBytes ) {
+			$this->notify_storage_cap_reached();
+		}
+
+		return $deleted;
+	}
+
+	/**
+	 * Whether there's enough free disk space to safely take a snapshot.
+	 */
+	public static function disk_space_ok(): bool {
+		$free = Storage::free_bytes();
+		return null === $free || $free >= self::MIN_FREE_BYTES;
+	}
+
+	/**
+	 * Email the admin + set an admin notice that a snapshot was skipped due to
+	 * low disk space, and what to do about it.
+	 */
+	private static function notify_low_disk(): void {
+		$site = wp_specialchars_decode( (string) get_option( 'blogname' ), ENT_QUOTES );
+		wp_mail(
+			(string) get_option( 'admin_email' ),
+			sprintf( '[%s] WP Chrono: snapshot skipped — low disk space', $site ),
+			"WP Chrono could not take a pre-update snapshot because free disk space is below " . size_format( self::MIN_FREE_BYTES ) . ".\n\n"
+			. "The update was still allowed to proceed, so there is no snapshot to undo it from.\n\n"
+			. "Free up disk space or raise the storage cap in WP Chrono → Settings.\n\n"
+			. home_url( '/' ) . "\n\nWP Chrono"
+		);
+		set_transient( 'wp_chrono_low_disk_notice', 1, HOUR_IN_SECONDS );
+	}
+
+	/**
+	 * Email the admin + set an admin notice that the storage cap can't be met
+	 * without deleting protected snapshots.
+	 */
+	private function notify_storage_cap_reached(): void {
+		$site = wp_specialchars_decode( (string) get_option( 'blogname' ), ENT_QUOTES );
+		wp_mail(
+			(string) get_option( 'admin_email' ),
+			sprintf( '[%s] WP Chrono: storage cap reached', $site ),
+			"WP Chrono's storage cap (" . size_format( Settings::get()['storage_cap_gb'] * GB_IN_BYTES ) . ")\n"
+			. "cannot be met without deleting manual, pinned, or the most recent update's snapshot.\n\n"
+			. "Old auto-snapshots have been cleaned up, but total storage is still above the cap.\n"
+			. "Please delete or export old snapshots manually, or raise the cap in WP Chrono → Settings.\n\n"
+			. home_url( '/' ) . "\n\nWP Chrono"
+		);
+		set_transient( 'wp_chrono_storage_cap_notice', 1, HOUR_IN_SECONDS );
+	}
+
+	/**
+	 * Admin notice for low disk space / storage cap warnings.
+	 */
+	public static function admin_notice(): void {
+		$notice = null;
+		if ( get_transient( 'wp_chrono_low_disk_notice' ) ) {
+			$notice = array(
+				'class' => 'error',
+				'message' => __( 'WP Chrono skipped a pre-update snapshot: free disk space is too low. The update proceeded without a snapshot to undo. Free up disk space or raise the storage cap in WP Chrono → Settings.', 'wp-chrono' ),
+			);
+			delete_transient( 'wp_chrono_low_disk_notice' );
+		} elseif ( get_transient( 'wp_chrono_storage_cap_notice' ) ) {
+			$notice = array(
+				'class' => 'warning',
+				'message' => __( 'WP Chrono storage cap reached: old auto-snapshots were cleaned up, but storage is still above the cap. Delete or export old snapshots manually, or raise the cap in WP Chrono → Settings.', 'wp-chrono' ),
+			);
+			delete_transient( 'wp_chrono_storage_cap_notice' );
+		}
+		if ( ! $notice || ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+		printf(
+			'<div class="notice notice-%1$s"><p>%2$s</p></div>',
+			esc_attr( $notice['class'] ),
+			esc_html( $notice['message'] )
+		);
 	}
 }

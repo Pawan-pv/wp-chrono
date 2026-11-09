@@ -74,6 +74,30 @@ final class Storage {
 	}
 
 	/**
+	 * Free disk space (bytes) for the storage directory, or null when the
+	 * host disables disk_free_space(). Read from WP_CONTENT_DIR, which is
+	 * where WP Chrono keeps its sealed storage folder.
+	 *
+	 * @return int|null
+	 */
+	public static function free_bytes(): ?int {
+		/**
+		 * Override the reported free disk space, mainly for tests.
+		 *
+		 * @param int|null $free Free bytes, or null to measure for real.
+		 */
+		$override = apply_filters( 'wp_chrono_storage_free_bytes', null );
+		if ( null !== $override ) {
+			return (int) $override;
+		}
+		if ( ! function_exists( 'disk_free_space' ) ) {
+			return null;
+		}
+		$free = @disk_free_space( WP_CONTENT_DIR ); // phpcs:ignore WordPress.PHP.NoSilencedErrors
+		return false === $free ? null : (int) $free;
+	}
+
+	/**
 	 * Removes the directory and everything in it. Used by uninstall.
 	 */
 	public static function destroy(): void {

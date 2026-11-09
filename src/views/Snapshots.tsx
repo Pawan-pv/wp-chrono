@@ -12,6 +12,8 @@ import {
   GitCompare,
   Hand,
   Loader2,
+  Pin,
+  PinOff,
   RefreshCw,
   RotateCcw,
   ShieldCheck,
@@ -101,7 +103,20 @@ export function Snapshots({ params, clearParams }: SnapshotsProps) {
     setSettings((s) => (s ? { ...s, ...changes } : s));
     const next = await api<ChronoSettings>('settings', { method: 'POST', body: changes });
     setSettings(next);
-    if ('auto_retention' in changes || 'storage_warn_mb' in changes) reload();
+    if ('auto_retention' in changes || 'storage_warn_mb' in changes || 'storage_cap_gb' in changes || 'storage_cap_autos' in changes) reload();
+  };
+
+  const togglePin = async (s: Snapshot) => {
+    const next = !!(s.meta.pinned);
+    try {
+      await api<{ id: number; pinned: boolean }>(`snapshots/${s.id}/pin`, {
+        method: 'POST',
+        body: { pinned: !next },
+      });
+      reload();
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const runExport = async (s: Snapshot) => {
@@ -188,6 +203,11 @@ export function Snapshots({ params, clearParams }: SnapshotsProps) {
             {data ? `${snapshots.length} snapshots · ${formatBytes(totalBytes)}` : 'Point-in-time copies of your database.'} Restores swap
             tables atomically and keep you signed in.
           </p>
+          {data && data.storage?.over_cap && (
+            <p className="mt-1 text-sm text-destructive">
+              Above storage cap ({formatBytes(data.storage.total_bytes)} of {formatBytes(data.storage.cap_bytes)} cap). Old auto-snapshots will be cleaned up next.
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {data && data.orphans.count > 0 && (
@@ -259,6 +279,38 @@ export function Snapshots({ params, clearParams }: SnapshotsProps) {
           </select>
           used
         </label>
+        <label className="flex items-center gap-3 text-sm">
+          Storage cap
+          <select
+            value={settings?.storage_cap_gb ?? 1}
+            disabled={!settings}
+            onChange={(e) => saveSettings({ storage_cap_gb: Number(e.target.value) })}
+            className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+            aria-label="Storage cap (GB)"
+          >
+            {[1, 2, 5, 10, 20, 50].map((gb) => (
+              <option key={gb} value={gb}>
+                {gb} GB
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-3 text-sm">
+          Min auto-snapshots kept when over cap
+          <select
+            value={settings?.storage_cap_autos ?? 3}
+            disabled={!settings}
+            onChange={(e) => saveSettings({ storage_cap_autos: Number(e.target.value) })}
+            className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+            aria-label="Min auto-snapshots kept when over cap"
+          >
+            {[1, 3, 5, 10, 20].map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </label>
         <button
           type="button"
           onClick={() => setScavenging(true)}
@@ -321,6 +373,7 @@ export function Snapshots({ params, clearParams }: SnapshotsProps) {
               onExport={() => runExport(s)}
               onDelete={() => setDeleting(s)}
               onResume={() => resumeBuild(s)}
+              onTogglePin={() => togglePin(s)}
               onPush={data?.cloud.configured ? () => runPush(s) : undefined}
             />
           ))}
@@ -433,6 +486,7 @@ interface SnapshotRowProps {
   onExport: () => void;
   onDelete: () => void;
   onResume: () => void;
+  onTogglePin: () => void;
   /** Present only when cloud storage is configured. */
   onPush?: () => void;
 }
@@ -473,7 +527,7 @@ function SafeUpdateBadge({ check }: { check: SafeUpdateCheck }) {
   );
 }
 
-function SnapshotRow({ snapshot: s, last, busy, onDiff, onRestore, onExport, onDelete, onResume, onPush }: SnapshotRowProps) {
+function SnapshotRow({ snapshot: s, last, busy, onDiff, onRestore, onExport, onDelete, onResume, onTogglePin, onPush }: SnapshotRowProps) {
   const trigger = TRIGGERS[s.trigger_type] ?? TRIGGERS.manual;
   const TriggerIcon = trigger.icon;
   const ready = s.status === 'ready';
@@ -524,6 +578,7 @@ function SnapshotRow({ snapshot: s, last, busy, onDiff, onRestore, onExport, onD
             </Badge>
           )}
           {s.meta.safe_update && <SafeUpdateBadge check={s.meta.safe_update} />}
+          {s.meta.pinned && <Badge variant="outline" title="Pinned — never auto-deleted by the storage cap">Pinned</Badge>}
           {s.meta.last_restored_at && <Badge variant="outline">restored {timeAgo(s.meta.last_restored_at)}</Badge>}
         </div>
         {(s.meta.safe_update?.status === 'undone' || s.meta.safe_update?.status === 'undo_failed') && (
@@ -597,6 +652,21 @@ function SnapshotRow({ snapshot: s, last, busy, onDiff, onRestore, onExport, onD
                 {s.meta.cloud?.pushed_at ? 'Pushed' : 'Push'}
               </Button>
             )}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={onTogglePin}
+              disabled={!ready}
+              aria-label={s.meta.pinned ? 'Unpin snapshot' : 'Pin snapshot'}
+              title={s.meta.pinned ? 'Pinned — never auto-deleted' : 'Pin — never auto-deleted by the storage cap'}
+            >
+              {s.meta.pinned ? (
+                <Pin className="h-3.5 w-3.5 text-sky-700 dark:text-sky-400" />
+              ) : (
+                <PinOff className="h-3.5 w-3.5 text-muted-foreground" />
+              )}
+            </Button>
             <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive" onClick={onDelete} aria-label="Delete snapshot">
               <Trash2 />
             </Button>

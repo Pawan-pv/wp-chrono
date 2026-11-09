@@ -180,6 +180,20 @@ export function SettingsDialog({ open, onOpenChange, tab, onTabChange }: Setting
             </label>
             <label className="flex items-center justify-between gap-4 text-sm">
               <span className="flex flex-col">
+                <span className="text-sm font-medium">Storage cap (GB)</span>
+                <span className="text-xs text-muted-foreground">Hard cap on snapshot tables + archives + exports. Old auto-snapshots are deleted first when exceeded.</span>
+              </span>
+              <Input type="number" min={1} max={1024} className="w-24" value={settings?.storage_cap_gb ?? ''} onChange={(e) => num('storage_cap_gb', e.target.value)} aria-label="Storage cap (GB)" />
+            </label>
+            <label className="flex items-center justify-between gap-4 text-sm">
+              <span className="flex flex-col">
+                <span className="text-sm font-medium">Min auto-snapshots to keep when over GB cap</span>
+                <span className="text-xs text-muted-foreground">The GB cap never deletes below this many auto-snapshots. The count cap is set by “Keep the last … auto-snapshots”.</span>
+              </span>
+              <Input type="number" min={1} max={50} className="w-24" value={settings?.storage_cap_autos ?? ''} onChange={(e) => num('storage_cap_autos', e.target.value)} aria-label="Min auto-snapshots to keep when over GB cap" />
+            </label>
+            <label className="flex items-center justify-between gap-4 text-sm">
+              <span className="flex flex-col">
                 Rollback archive size limit (MB)
                 <span className="text-xs text-muted-foreground">Plugin / theme folders larger than this are not archived before updates.</span>
               </span>
