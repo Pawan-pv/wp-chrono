@@ -151,8 +151,7 @@ final class Commands {
 		} else {
 			WP_CLI::success( 'No auto-snapshots needed cleanup.' );
 		}
-	}
-}
+	} // end storage_cleanup
 
 	/**
 	 * Show database, snapshot and disk status.

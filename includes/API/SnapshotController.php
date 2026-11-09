@@ -315,7 +315,7 @@ final class SnapshotController extends RestController {
 		return $this->ok( array( 'deleted' => $deleted, 'storage' => ( new SiteInspector() )->storage_usage() ) );
 	}
 
-	public function pin( WP_REST_Request $request ): \WP_REST_Response|WP_Error {
+	public function pin( WP_REST_Request $request ) {
 		$snapshot = $this->service->get( (int) $request['id'] );
 		if ( is_wp_error( $snapshot ) ) {
 			return $snapshot;
